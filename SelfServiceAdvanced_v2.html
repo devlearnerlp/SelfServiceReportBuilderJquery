@@ -1,0 +1,622 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Self-Service Query Builder — Prasanth test pilot </title>
+
+  <!-- Bootstrap + jQuery UI -->
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/5.3.2/css/bootstrap.min.css" rel="stylesheet"/>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/jqueryui/1.13.2/themes/smoothness/jquery-ui.min.css" rel="stylesheet"/>
+
+  <style>
+    body { font-family: Arial, Helvetica, sans-serif; background:#f6f8fb; padding:18px; color:#0f1720; }
+    .card-panel { background:#fff; padding:12px; border-radius:8px; box-shadow:0 2px 6px rgba(2,6,23,0.06); margin-bottom:12px; }
+    .pick-list { min-height:120px; border:1px dashed #cfd8e3; padding:8px; border-radius:6px; background:#fcfdff; overflow:auto; }
+    .pick-item { padding:8px 10px; margin:6px 0; background:#fff; border-radius:6px; border:1px solid #e6eef8; cursor:grab; display:flex; justify-content:space-between; align-items:center; }
+    .drop-target { min-height:80px; border:2px dashed transparent; padding:8px; border-radius:6px; background:#fcfeff; }
+    .drop-target.ui-state-highlight { border-color:#8ec5ff; background:#f1fbff; }
+    .table-block, .selected-column { padding:8px; border-radius:6px; border:1px solid #eef6ff; margin-bottom:6px; background:#fff; display:flex; justify-content:space-between; align-items:center; }
+    .filter-row { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
+    pre.sql { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", monospace; background:#0f1720; color:#f8fafc; padding:12px; border-radius:6px; min-height:120px; white-space:pre-wrap; }
+    .btn-ghost { background:transparent; border:1px dashed #cbd5e1; color:#334155; padding:4px 8px; border-radius:6px; }
+    .small-muted { color:#6b7280; font-size:0.9rem; }
+    .join-row { display:flex; gap:8px; align-items:center; margin-bottom:8px; border:1px solid #eef6ff; padding:8px; border-radius:6px; background:#fff; }
+    .join-row .btn-remove-join { margin-left:6px; }
+  </style>
+</head>
+<body>
+<div class="container">
+
+  <div class="card-panel">
+    <h3 class="mb-0">Self-Service Query Builder — Joins Bugfix</h3>
+    <div class="small-muted">Same UI as before — join selection persistence fixed.</div>
+  </div>
+
+  <!-- Role & Action -->
+  <div class="card-panel row gx-3 gy-2 align-items-end">
+    <div class="col-md-3">
+      <label class="form-label">Role</label>
+      <select id="roleSelect" class="form-select">
+        <option value="">-- Select Role --</option>
+        <option>MC Customer</option>
+        <option>MC Developer</option>
+      </select>
+    </div>
+
+    <div class="col-md-3">
+      <label class="form-label">Action</label>
+      <select id="actionSelect" class="form-select" disabled>
+        <option value="">-- Select Action --</option>
+        <option value="create">Create New Report</option>
+        <option value="edit">Edit Existing Report</option>
+      </select>
+    </div>
+
+    <div class="col-md-4" id="reportsCol" style="display:none;">
+      <label class="form-label">Existing Reports</label>
+      <select id="reportSelect" class="form-select"></select>
+    </div>
+
+    <div class="col-md-2">
+      <label class="form-label">Query Type</label>
+      <select id="queryType" class="form-select">
+        <option>Oracle</option>
+        <option>Databricks</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="row g-3">
+    <!-- Left palette -->
+    <div class="col-md-4">
+      <div class="card-panel">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <strong>Palette</strong>
+          <div class="small-muted">Drag items into builder</div>
+        </div>
+
+        <div>
+          <div class="small-muted">Tables</div>
+          <div id="tablesPalette" class="pick-list"></div>
+        </div>
+
+        <hr/>
+
+        <div>
+          <div class="small-muted">Columns</div>
+          <div id="columnsPalette" class="pick-list">Add table to see columns here.</div>
+        </div>
+
+        <hr/>
+
+        <div>
+          <div class="small-muted">Quick Filters</div>
+          <div id="quickFilters" class="pick-list"></div>
+        </div>
+
+        <div class="mt-3 text-center">
+          <div id="trash" class="btn-ghost p-2">Drag here to remove</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right builder -->
+    <div class="col-md-8">
+      <div class="card-panel">
+
+        <div class="mb-2">
+          <button class="btn btn-sm btn-outline-primary me-2" data-bs-toggle="collapse" data-bs-target="#panelTables">Tables & Columns</button>
+          <button class="btn btn-sm btn-outline-primary me-2" data-bs-toggle="collapse" data-bs-target="#panelJoins">Joins</button>
+          <button class="btn btn-sm btn-outline-primary me-2" data-bs-toggle="collapse" data-bs-target="#panelFilters">Filters</button>
+          <button class="btn btn-sm btn-outline-primary" data-bs-toggle="collapse" data-bs-target="#panelQuery">Query</button>
+        </div>
+
+        <!-- Tables & Columns -->
+        <div id="panelTables" class="collapse show">
+          <div class="row">
+            <div class="col-md-6 mb-2">
+              <label class="form-label">Selected Tables (drop tables here)</label>
+              <div id="selectedTables" class="drop-target pick-list"></div>
+              <div class="mt-2 small-muted">Click a table in the palette to add. Drag to reorder.</div>
+            </div>
+
+            <div class="col-md-6 mb-2">
+              <label class="form-label">Selected Columns (drop columns here)</label>
+              <div id="selectedColumns" class="drop-target pick-list"></div>
+              <div class="mt-2 small-muted">Drag columns from Columns palette to include in SELECT. Double-click to remove.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Joins -->
+        <div id="panelJoins" class="collapse show mt-3">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <strong>Join Builder</strong>
+            <div>
+              <button id="addJoinBtn" class="btn btn-sm btn-outline-secondary">+ Add Join</button>
+            </div>
+          </div>
+
+          <div id="joinArea" class="mb-2"></div>
+          <div class="small-muted">Add, remove, and drag to reorder join conditions. Query uses join order.</div>
+        </div>
+
+        <!-- Filters -->
+        <div id="panelFilters" class="collapse show mt-3">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <strong>Filters</strong>
+            <div><button id="addFilterBtn" class="btn btn-sm btn-outline-secondary">+ Add Filter</button></div>
+          </div>
+          <div id="filtersArea" class="drop-target p-2" style="min-height:80px;"></div>
+        </div>
+
+        <!-- Query -->
+        <div id="panelQuery" class="collapse show mt-3">
+          <div class="mb-2">
+            <label class="form-label">Generated Query</label>
+            <pre id="generatedQuery" class="sql"></pre>
+          </div>
+
+          <div class="d-flex gap-2">
+            <button id="previewBtn" class="btn btn-primary">Preview</button>
+            <button id="saveBtn" class="btn btn-warning">Save (temp)</button>
+            <button id="submitBtn" class="btn btn-success">Submit (save report)</button>
+            <div class="ms-auto small-muted">Live SQL updates automatically</div>
+          </div>
+
+          <div id="previewPanel" style="display:none;" class="mt-3">
+            <h6 class="mt-2">Preview (mock)</h6>
+            <div id="previewNotice" class="small-muted mb-2"></div>
+            <div class="table-responsive"><table id="previewTable" class="table table-sm table-striped preview-table"></table></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- libs -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jqueryui/1.13.2/jquery-ui.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/5.3.2/js/bootstrap.bundle.min.js"></script>
+
+<script>
+/* Fixed join selection persistence:
+   - When rebuild options for join selects, preserve current selection.
+   - If current selection is not in new choices, keep it by adding it back.
+*/
+
+// Dummy metadata
+const META = {
+  tables: {
+    Customers: { cols:['customer_id','name','email','city','created_at'] },
+    Orders: { cols:['order_id','customer_id','product_id','order_date','quantity','amount','status'] },
+    Products: { cols:['product_id','name','price','stock','category'] },
+    Payments: { cols:['payment_id','order_id','amount','payment_date','method'] }
+  },
+  relationships: [
+    { left:'Customers', leftCol:'customer_id', right:'Orders', rightCol:'customer_id' },
+    { left:'Products', leftCol:'product_id', right:'Orders', rightCol:'product_id' },
+    { left:'Orders', leftCol:'order_id', right:'Payments', rightCol:'order_id' }
+  ],
+  sampleReports: {
+    salesReport: `SELECT Products.product_id, Products.name, SUM(Orders.quantity) AS total_qty
+FROM Products
+JOIN Orders ON Products.product_id = Orders.product_id
+GROUP BY Products.product_id, Products.name;`
+  }
+};
+
+let state = { selectedTables: [], selectedColumns: [] };
+
+$(function(){
+  initPalette();
+  initQuickFilters();
+  bindUI();
+  loadReportsDropdown();
+  renderAll();
+});
+
+function initPalette(){
+  const tpal = $('#tablesPalette').empty();
+  for (const t of Object.keys(META.tables)) {
+    const item = $(`<div class="pick-item" data-type="table" data-table="${t}"><div>${t}</div><div class="meta">table</div></div>`);
+    tpal.append(item);
+  }
+}
+
+function initQuickFilters(){
+  const q = $('#quickFilters').empty();
+  q.append(`<div class="pick-item" data-type="quick" data-filter="Orders.status = 'COMPLETE'"><div>Orders.status = COMPLETE</div><div class="meta">quick</div></div>`);
+  q.append(`<div class="pick-item" data-type="quick" data-filter="Products.stock < 10"><div>Products.stock &lt; 10</div><div class="meta">quick</div></div>`);
+  q.append(`<div class="pick-item" data-type="quick" data-filter="Customers.city = 'Bengaluru'"><div>Customers.city = Bengaluru</div><div class="meta">quick</div></div>`);
+}
+
+function bindUI(){
+  $(document).on('mouseenter', '.pick-item', function(){ if (!$(this).data('ui-draggable')) $(this).draggable({ helper:'clone', revert:'invalid', appendTo:'body', zIndex:9999 }); });
+
+  $('#selectedTables').droppable({ accept: '.pick-item[data-type="table"]', hoverClass: 'ui-state-highlight', drop: function(e, ui){ addTable(ui.draggable.data('table')); } });
+  $('#selectedColumns').droppable({ accept: '.pick-item', hoverClass: 'ui-state-highlight', drop: function(e, ui){ const type = ui.draggable.data('type'); if (type==='column') addColumn(ui.draggable.data('col')); else if (type==='table') populateColumnsForTable(ui.draggable.data('table')); } });
+  $('#filtersArea').droppable({ accept: '.pick-item', hoverClass: 'ui-state-highlight', drop: function(e, ui){ const type = ui.draggable.data('type'); if (type==='column'){ const parts = ui.draggable.data('col').split('.'); addFilterRow({table:parts[0], column:parts[1], op:'=', value:''}); } else if (type==='quick') addFilterFromText(ui.draggable.data('filter')); else if (type==='table') addFilterRow({table:ui.draggable.data('table'), column:META.tables[ui.draggable.data('table')].cols[0], op:'=', value:''}); } });
+
+  $('#trash').droppable({ accept: '.selected-table, .selected-column, .filter-row, .join-row', hoverClass: 'ui-state-highlight', drop: function(e, ui){ const el = ui.draggable; if (el.hasClass('selected-table')) removeTable(el.data('table')); else if (el.hasClass('selected-column')) removeColumn(el.data('col')); else if (el.hasClass('filter-row') || el.hasClass('join-row')) el.remove(); buildQuery(); } });
+
+  $(document).on('click', '.pick-item[data-type="table"]', function(){ addTable($(this).data('table')); });
+  $(document).on('click', '.pick-item[data-type="column"]', function(){ addColumn($(this).data('col')); });
+  $(document).on('click', '.pick-item[data-type="quick"]', function(){ addFilterFromText($(this).data('filter')); });
+
+  $('#addJoinBtn').on('click', function(){ addJoinRow(); });
+  $('#addFilterBtn').on('click', function(){ addFilterRow(); });
+
+  $('#previewBtn').on('click', preview);
+  $('#saveBtn').on('click', saveTemp);
+  $('#submitBtn').on('click', submitReport);
+
+  $('#roleSelect').on('change', function(){ $('#actionSelect').prop('disabled', !this.value).val(''); $('#reportsCol').hide(); clearBuilder(); renderAll(); });
+  $('#actionSelect').on('change', function(){ const v=$(this).val(); if (v==='edit') $('#reportsCol').show(); else $('#reportsCol').hide(); clearBuilder(); renderAll();});
+  $('#reportSelect').on('change', function(){ const k=$(this).val(); if (!k) return; const saved=JSON.parse(localStorage.getItem('ssqb_reports')||'{}'); const sql=saved[k]||META.sampleReports[k]; $('#generatedQuery').text(sql); parseSQLToBuilder(sql); });
+
+  $('#queryType').on('change', buildQuery);
+}
+
+// Tables & columns
+function addTable(t){
+  if (!t) return;
+  if (!state.selectedTables.includes(t)) state.selectedTables.push(t);
+  renderSelectedTables();
+  populateColumnsForTable(t);
+  suggestJoins();
+  buildQuery();
+}
+function removeTable(t){
+  state.selectedTables = state.selectedTables.filter(x=>x!==t);
+  state.selectedColumns = state.selectedColumns.filter(c=>!c.startsWith(t+'.'));
+  $('#filtersArea .filter-row').each(function(){ const table = $(this).find('.filter-table').val(); if (table===t) $(this).remove(); });
+  $('#joinArea .join-row').each(function(){ const left=$(this).find('.join-left-table').val(), right=$(this).find('.join-right-table').val(); if (left===t || right===t) $(this).remove(); });
+  renderSelectedTables(); renderSelectedColumns(); populateColumnsPalette(); suggestJoins(); buildQuery();
+}
+function renderSelectedTables(){
+  const container = $('#selectedTables').empty();
+  state.selectedTables.forEach(t=>{
+    const el = $(`<div class="table-block selected-table" data-table="${t}"><div><strong>${t}</strong></div><div><button class="btn btn-sm btn-ghost remove-table">Remove</button></div></div>`);
+    el.find('.remove-table').on('click', ()=>{ removeTable(t); buildQuery(); });
+    el.data('table', t);
+    container.append(el);
+    el.draggable({ helper:'clone', revert:'invalid', appendTo:'body' });
+  });
+  container.sortable({ stop: function(){ state.selectedTables = $('#selectedTables .selected-table').map(function(){ return $(this).data('table'); }).get(); suggestJoins(); populateColumnsPalette(); buildQuery(); }});
+}
+function populateColumnsPalette(){
+  const pal = $('#columnsPalette').empty();
+  if (!state.selectedTables.length) { pal.append('<div class="small-muted">Add a table to see columns here.</div>'); return; }
+  state.selectedTables.forEach(t=>{
+    pal.append(`<div class="small-muted mt-1"><strong>${t}</strong></div>`);
+    for (const c of META.tables[t].cols){
+      const item = $(`<div class="pick-item" data-type="column" data-col="${t}.${c}"><div>${t}.${c}</div><div class="meta">col</div></div>`);
+      pal.append(item);
+    }
+  });
+  pal.find('.pick-item[data-type="column"]').draggable({ helper:'clone', revert:'invalid', appendTo:'body' });
+}
+function populateColumnsForTable(t){
+  if (!state.selectedTables.includes(t)) addTable(t);
+  const pal = $('#columnsPalette').empty();
+  pal.append(`<div class="small-muted"><strong>${t}</strong></div>`);
+  for (const c of META.tables[t].cols){
+    const item = $(`<div class="pick-item" data-type="column" data-col="${t}.${c}"><div>${t}.${c}</div><div class="meta">col</div></div>`);
+    pal.append(item);
+  }
+  pal.find('.pick-item[data-type="column"]').draggable({ helper:'clone', revert:'invalid', appendTo:'body' });
+}
+function addColumn(col){
+  if (!col) return;
+  if (!state.selectedColumns.includes(col)) state.selectedColumns.push(col);
+  renderSelectedColumns();
+  buildQuery();
+}
+function removeColumn(col){
+  state.selectedColumns = state.selectedColumns.filter(c=>c!==col);
+  renderSelectedColumns();
+}
+function renderSelectedColumns(){
+  const cont = $('#selectedColumns').empty();
+  state.selectedColumns.forEach(c=>{
+    const el = $(`<div class="selected-column" data-col="${c}">${c} <button class="btn btn-sm btn-ghost ms-2 remove-col">Remove</button></div>`);
+    el.find('.remove-col').on('click', ()=>{ removeColumn(c); buildQuery(); });
+    cont.append(el);
+    el.draggable({ helper:'clone', revert:'invalid', appendTo:'body' });
+  });
+  cont.sortable({ stop:function(){ state.selectedColumns = $('#selectedColumns .selected-column').map(function(){ return $(this).data('col'); }).get(); buildQuery(); }});
+}
+
+// Joins — single robust addJoinRow and updateJoinTableOptions that preserves selections
+function addJoinRow(pref){
+  const leftChoices = state.selectedTables.length ? state.selectedTables : Object.keys(META.tables);
+  const rightChoices = [...leftChoices];
+  const row = $(`<div class="join-row ui-state-default"></div>`);
+  const leftSel = $('<select class="form-select join-left-table" style="width:140px"></select>');
+  leftSel.append('<option value="">--left--</option>'); leftChoices.forEach(t=>leftSel.append($('<option>').val(t).text(t)));
+  const leftCol = $('<select class="form-select join-left-col" style="width:120px"><option value="">--col--</option></select>');
+  const typeSel = $('<select class="form-select join-type" style="width:110px"><option value="INNER">INNER</option><option value="LEFT">LEFT</option><option value="RIGHT">RIGHT</option></select>');
+  const rightSel = $('<select class="form-select join-right-table" style="width:140px"></select>');
+  rightSel.append('<option value="">--right--</option>'); rightChoices.forEach(t=>rightSel.append($('<option>').val(t).text(t)));
+  const rightCol = $('<select class="form-select join-right-col" style="width:120px"><option value="">--col--</option></select>');
+  const removeBtn = $('<button class="btn btn-sm btn-danger btn-remove-join">Remove</button>');
+
+  row.append(leftSel, leftCol, typeSel, rightSel, rightCol, removeBtn);
+  $('#joinArea').append(row);
+
+  // prefill safely
+  if (pref) {
+    if (pref.left) leftSel.val(pref.left);
+    if (pref.right) rightSel.val(pref.right);
+    if (pref.type) typeSel.val(pref.type);
+  }
+
+  function populateColsFor(sel, colSelect, prefCol){
+    const tbl = sel.val();
+    const cur = colSelect.val();
+    colSelect.empty().append('<option value="">--col--</option>');
+    if (tbl && META.tables[tbl]) {
+      // preserve prefCol or cur: if prefCol exists and not in list, add it first so it won't be lost
+      if (prefCol && !META.tables[tbl].cols.includes(prefCol)) colSelect.append($('<option>').val(prefCol).text(prefCol));
+      META.tables[tbl].cols.forEach(c=>colSelect.append($('<option>').val(c).text(c)));
+      // restore value if possible
+      const restore = prefCol || cur;
+      if (restore) colSelect.val(restore);
+    } else {
+      // no table: keep current value if any
+      if (cur) colSelect.append($('<option>').val(cur).text(cur)).val(cur);
+    }
+  }
+
+  leftSel.on('change', function(){ populateColsFor(leftSel, leftCol); buildQuery(); updateJoinTableOptions(); });
+  rightSel.on('change', function(){ populateColsFor(rightSel, rightCol); buildQuery(); updateJoinTableOptions(); });
+  leftCol.on('change', buildQuery);
+  rightCol.on('change', buildQuery);
+  typeSel.on('change', buildQuery);
+  removeBtn.on('click', function(){ row.remove(); buildQuery(); });
+
+  // sortable for join rows
+  $('#joinArea').sortable({ stop:function(){ buildQuery(); } });
+
+  setTimeout(()=>{
+    // if pref had columns, ensure they are present and selected (preserve)
+    if (pref && pref.left) populateColsFor(leftSel, leftCol, pref.leftCol);
+    if (pref && pref.right) populateColsFor(rightSel, rightCol, pref.rightCol);
+    buildQuery();
+  }, 40);
+}
+
+// update join table selects/cols when selectedTables change — preserve current values
+function updateJoinTableOptions(){
+  const choices = state.selectedTables.length ? state.selectedTables : Object.keys(META.tables);
+  $('#joinArea .join-row').each(function(){
+    const leftSel = $(this).find('.join-left-table'), rightSel = $(this).find('.join-right-table');
+    const leftCol = $(this).find('.join-left-col'), rightCol = $(this).find('.join-right-col');
+    const curLeft = leftSel.val(), curRight = rightSel.val();
+    // rebuild leftSel options but keep curLeft if present or add it as option
+    leftSel.empty().append('<option value="">--table--</option>');
+    if (curLeft && !choices.includes(curLeft)) leftSel.append($('<option>').val(curLeft).text(curLeft));
+    choices.forEach(t => leftSel.append($('<option>').val(t).text(t)));
+    if (curLeft) leftSel.val(curLeft);
+
+    rightSel.empty().append('<option value="">--table--</option>');
+    if (curRight && !choices.includes(curRight)) rightSel.append($('<option>').val(curRight).text(curRight));
+    choices.forEach(t=> rightSel.append($('<option>').val(t).text(t)));
+    if (curRight) rightSel.val(curRight);
+
+    // rebuild columns, preserve previous column selection too
+    const curLeftCol = leftCol.val(), curRightCol = rightCol.val();
+    const lt = leftSel.val(), rt = rightSel.val();
+    leftCol.empty().append('<option value="">--col--</option>');
+    if (curLeftCol && lt && !META.tables[lt].cols.includes(curLeftCol)) leftCol.append($('<option>').val(curLeftCol).text(curLeftCol));
+    if (lt && META.tables[lt]) META.tables[lt].cols.forEach(c => leftCol.append($('<option>').val(c).text(c)));
+    if (curLeftCol) leftCol.val(curLeftCol);
+
+    rightCol.empty().append('<option value="">--col--</option>');
+    if (curRightCol && rt && !META.tables[rt].cols.includes(curRightCol)) rightCol.append($('<option>').val(curRightCol).text(curRightCol));
+    if (rt && META.tables[rt]) META.tables[rt].cols.forEach(c => rightCol.append($('<option>').val(c).text(c)));
+    if (curRightCol) rightCol.val(curRightCol);
+  });
+}
+
+// Filters
+function addFilterRow(pref){
+  const wrapper = $(`<div class="filter-row"></div>`);
+  const tableSel = $('<select class="form-select filter-table" style="width:28%"></select>');
+  tableSel.append('<option value="">--table--</option>');
+  const choices = state.selectedTables.length ? state.selectedTables : Object.keys(META.tables);
+  choices.forEach(t => tableSel.append($('<option>').val(t).text(t)));
+  const colSel = $('<select class="form-select filter-col" style="width:28%"></select>').append('<option value="">--column--</option>');
+  const opSel = $('<select class="form-select filter-op" style="width:18%"><option>=</option><option>!=</option><option>&gt;</option><option>&lt;</option><option>LIKE</option></select>');
+  const valInp = $('<input class="form-control filter-val" style="width:26%" placeholder="value"/>');
+  const rem = $('<button class="btn btn-sm btn-outline-danger">X</button>');
+  rem.on('click', function(){ wrapper.remove(); buildQuery(); });
+  wrapper.append(tableSel, colSel, opSel, valInp, rem);
+  $('#filtersArea').append(wrapper);
+
+  tableSel.on('change', function(){
+    const t = $(this).val();
+    colSel.empty().append('<option value="">--column--</option>');
+    if (t && META.tables[t]) META.tables[t].cols.forEach(c => colSel.append($('<option>').val(c).text(c)));
+    buildQuery();
+  });
+  wrapper.on('change keyup', '.filter-col, .filter-op, .filter-val', buildQuery);
+
+  if (pref) {
+    if (pref.table) tableSel.val(pref.table).trigger('change');
+    setTimeout(()=>{ if (pref.column) colSel.val(pref.column); }, 50);
+    if (pref.op) opSel.val(pref.op);
+    if (pref.value) valInp.val(pref.value);
+  }
+}
+
+function addFilterFromText(text){
+  const m = text.match(/([A-Za-z0-9_]+)\.([A-Za-z0-9_]+)\s*(=|!=|>|<|>=|<=|like)\s*'?([^']*)'?/i);
+  if (m) addFilterRow({table:m[1], column:m[2], op:m[3], value:m[4]});
+  else addFilterRow({table:'', column:'', op:'=', value:text});
+}
+
+// Build query (reads join rows in DOM order)
+function buildQuery(){
+  const qType = $('#queryType').val();
+  let selectClause = '*';
+  if (state.selectedColumns.length) selectClause = state.selectedColumns.join(', ');
+  else if (state.selectedTables.length) selectClause = state.selectedTables.map(t=> `${t}.*`).join(', ');
+
+  let fromClause = '';
+  if (state.selectedTables.length){
+    fromClause = state.selectedTables[0];
+    const joinLines = [];
+    $('#joinArea .join-row').each(function(){
+      const left = $(this).find('.join-left-table').val();
+      const leftCol = $(this).find('.join-left-col').val();
+      const type = $(this).find('.join-type').val();
+      const right = $(this).find('.join-right-table').val();
+      const rightCol = $(this).find('.join-right-col').val();
+      if (left && right){
+        if (leftCol && rightCol) joinLines.push(`${type} JOIN ${right} ON ${left}.${leftCol} = ${right}.${rightCol}`);
+        else joinLines.push(`${type} JOIN ${right} ON 1=1 -- TODO`);
+      }
+    });
+    if (joinLines.length) fromClause += '\n' + joinLines.join('\n');
+  }
+
+  const filterConds = [];
+  $('#filtersArea .filter-row').each(function(){
+    const t = $(this).find('.filter-table').val();
+    const c = $(this).find('.filter-col').val();
+    const op = $(this).find('.filter-op').val();
+    const v = $(this).find('.filter-val').val();
+    if (t && c && op && (v !== undefined && v !== '')) {
+      if (op.toUpperCase() === 'LIKE') filterConds.push(`${t}.${c} LIKE '%${v}%'`);
+      else filterConds.push(`${t}.${c} ${op} '${v}'`);
+    }
+  });
+
+  let sql = '';
+  if (!fromClause) sql = `SELECT ${selectClause};`;
+  else sql = `SELECT ${selectClause}\nFROM ${fromClause}${filterConds.length ? '\nWHERE ' + filterConds.join(' AND ') : ''};`;
+
+  $('#generatedQuery').text(sql);
+  return sql;
+}
+
+// preview mock
+function preview(){
+  const sql = buildQuery();
+  if (!sql || sql.trim()==='') { alert('Generate query first'); return; }
+  $('#previewPanel').show();
+  $('#previewNotice').text('Mock preview (client-side)');
+  const mock = mockPreviewFromSQL(sql);
+  renderPreviewTable(mock);
+}
+function mockPreviewFromSQL(sql){
+  const selMatch = sql.match(/select\s+([\s\S]*?)\s+from/i);
+  let cols = [];
+  if (selMatch) cols = selMatch[1].split(',').map(s=>s.trim()).slice(0,8);
+  if (!cols.length) cols = ['col1','col2','col3'];
+  const rows = [];
+  for (let i=1;i<=6;i++){
+    const r = {};
+    cols.forEach(c=>{
+      const name = c.includes('.') ? c.split('.')[1] : c.replace(/[^a-z0-9_]/ig,'');
+      r[c] = sampleValue(name,i);
+    });
+    rows.push(r);
+  }
+  return { columns: cols, rows };
+}
+function sampleValue(name,i){
+  const n = name.toLowerCase();
+  if (n.includes('id')) return i;
+  if (n.includes('name')) return `Name ${i}`;
+  if (n.includes('email')) return `user${i}@example.com`;
+  if (n.includes('date')) return `2024-0${(i%9)+1}-01`;
+  if (n.includes('amount')||n.includes('price')) return (i*12.5).toFixed(2);
+  if (n.includes('city')) return ['Mumbai','Bengaluru','Delhi','Chennai'][i%4];
+  return `val_${i}`;
+}
+function renderPreviewTable(data){
+  const cols = data.columns || [];
+  const rows = data.rows || [];
+  const table = $('#previewTable').empty();
+  const thead = $('<thead>').appendTo(table); const trh = $('<tr>').appendTo(thead);
+  cols.forEach(c=> $('<th>').text(c).appendTo(trh));
+  const tbody = $('<tbody>').appendTo(table);
+  rows.forEach(r=>{ const tr=$('<tr>').appendTo(tbody); cols.forEach(c=> $('<td>').text(r[c]).appendTo(tr)); });
+}
+
+// save / submit
+function saveTemp(){ sessionStorage.setItem('ssqb_draft', JSON.stringify({sql:$('#generatedQuery').text(), savedAt:Date.now()})); alert('Saved temp draft'); }
+function submitReport(){ const sql=$('#generatedQuery').text(); if(!sql||sql.trim()==='') return alert('Nothing to submit'); const key=prompt('Report key:'); if(!key) return; const stored=JSON.parse(localStorage.getItem('ssqb_reports')||'{}'); stored[key]=sql; localStorage.setItem('ssqb_reports', JSON.stringify(stored)); alert('Report saved'); loadReportsDropdown(); }
+
+function loadReportsDropdown(){ const sel=$('#reportSelect').empty(); sel.append($('<option>').val('').text('-- choose report --')); for(const k of Object.keys(META.sampleReports)) sel.append($('<option>').val(k).text(k+' (sample)')); const saved=JSON.parse(localStorage.getItem('ssqb_reports')||'{}'); for(const k of Object.keys(saved)) sel.append($('<option>').val(k).text(k+' (saved)')); }
+
+function parseSQLToBuilder(sql){
+  state.selectedTables=[]; state.selectedColumns=[];
+  $('#filtersArea').empty(); $('#joinArea').empty();
+  try {
+    const fromMatch = sql.match(/\bfrom\s+([A-Za-z0-9_\."]+)/i);
+    const fromTbl = fromMatch ? cleanToken(fromMatch[1]) : null;
+    const joinMatches = [...sql.matchAll(/\bjoin\s+([A-Za-z0-9_\."]+)/ig)].map(m=>cleanToken(m[1]));
+    const tables=[]; if (fromTbl) tables.push(fromTbl); joinMatches.forEach(j => { if(!tables.includes(j)) tables.push(j); });
+    const known = Object.keys(META.tables); const selected = tables.filter(t=>known.includes(t));
+    selected.forEach(t=>state.selectedTables.push(t));
+    renderSelectedTables(); populateColumnsPalette();
+    const selMatch = sql.match(/\bselect\s+([\s\S]*?)\s+from\s+/i);
+    if (selMatch){
+      const cols = selMatch[1].split(',').map(s=>s.trim());
+      cols.forEach(c=>{
+        const main = c.split(/\s+as\s+/i)[0].trim();
+        if (main.includes('.')) state.selectedColumns.push(main);
+        else {
+          for (const t of selected) {
+            if (META.tables[t].cols.includes(main.replace(/["'`]/g,''))) { state.selectedColumns.push(`${t}.${main}`); break; }
+          }
+        }
+      });
+    }
+    renderSelectedColumns();
+    const whereMatch = sql.match(/\bwhere\s+([\s\S]*?)(?:group\s+by|order\s+by|;|$)/i);
+    if (whereMatch){
+      const conds = whereMatch[1].split(/\s+and\s+/i);
+      conds.forEach(cond => {
+        const m = cond.match(/([A-Za-z0-9_]+)\.([A-Za-z0-9_]+)\s*(=|!=|>|<|>=|<=|like)\s*'?([^']*)'?/i);
+        if (m) addFilterRow({table:m[1], column:m[2], op:m[3], value:m[4]});
+      });
+    }
+    suggestJoins(); buildQuery();
+  } catch(e) { console.warn('parse failed', e); }
+}
+function cleanToken(tok){ return tok.replace(/["'`]/g,'').split('.')[0]; }
+
+// suggest joins based on adjacent pairs
+function suggestJoins(){
+  $('#joinArea').empty();
+  for (let i=0;i<state.selectedTables.length-1;i++){
+    const left=state.selectedTables[i], right=state.selectedTables[i+1];
+    const rel = META.relationships.find(r => (r.left===left && r.right===right) || (r.left===right && r.right===left));
+    if (rel){
+      if (rel.left===left) addJoinRow({left, leftCol:rel.leftCol, type:'INNER', right, rightCol:rel.rightCol});
+      else addJoinRow({left, leftCol:rel.rightCol, type:'INNER', right, rightCol:rel.leftCol});
+    } else {
+      addJoinRow({left, leftCol:META.tables[left].cols[0], type:'LEFT', right, rightCol:META.tables[right].cols[0]});
+    }
+  }
+  updateJoinTableOptions();
+}
+
+// clearing and rendering
+function clearBuilder(){ state = { selectedTables: [], selectedColumns: [] }; $('#selectedTables').empty(); $('#selectedColumns').empty(); $('#columnsPalette').empty(); $('#filtersArea').empty(); $('#joinArea').empty(); $('#generatedQuery').text(''); }
+function renderAll(){ renderSelectedTables(); renderSelectedColumns(); populateColumnsPalette(); suggestJoins(); buildQuery(); }
+function renderSelectedColumns(){ const cont=$('#selectedColumns').empty(); state.selectedColumns.forEach(c=>{ const el=$(`<div class="selected-column" data-col="${c}">${c} <button class="btn btn-sm btn-ghost ms-2 remove-col">Remove</button></div>`); el.find('.remove-col').on('click', ()=>{ removeColumn(c); buildQuery(); }); cont.append(el); el.draggable({ helper:'clone', revert:'invalid', appendTo:'body' }); }); $('#selectedColumns').sortable({ stop:function(){ state.selectedColumns = $('#selectedColumns .selected-column').map(function(){ return $(this).data('col'); }).get(); buildQuery(); }}); }
+
+// initial
+renderAll();
+</script>
+</body>
+</html>
