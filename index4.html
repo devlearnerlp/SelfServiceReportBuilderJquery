@@ -1,0 +1,848 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Self-Service Query Builder - Drag & Drop (jQuery)</title>
+
+  <!-- Bootstrap -->
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/5.3.2/css/bootstrap.min.css" rel="stylesheet"/>
+  <!-- jQuery UI theme (for draggable/droppable visuals) -->
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/jqueryui/1.13.2/themes/smoothness/jquery-ui.min.css" rel="stylesheet"/>
+  <!-- Select2 (optional, used for multi-select fallback) -->
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/css/select2.min.css" rel="stylesheet"/>
+
+  <style>
+    body { background:#f6f8fb; font-family:Arial, Helvetica, sans-serif; padding:18px; }
+    h3 { margin-bottom:8px; }
+    .panel { background:#fff; border-radius:8px; padding:12px; box-shadow:0 2px 6px rgba(0,0,0,0.06); margin-bottom:12px; }
+    .pick-list { min-height:140px; border:1px dashed #cfd8e3; padding:8px; background:#fcfdff; border-radius:6px; overflow:auto; }
+    .pick-item { padding:6px 8px; margin:6px 0; background:#fff; border-radius:6px; border:1px solid #e6eef8; cursor:grab; }
+    .drop-target { min-height:80px; border:2px dashed transparent; transition: border-color .15s; padding:6px; }
+    .drop-target.ui-state-highlight { border-color:#8ec5ff; background:#f1fbff; }
+    .small { font-size:0.9rem; color:#666; }
+    textarea { font-family:monospace; }
+    .trash { text-align:center; padding:8px; border-radius:6px; background:#fff; border:1px solid #eee; color:#c0392b; }
+    .drag-hint { font-size:0.85rem; color:#666; margin-top:6px; }
+    .flex-gap { display:flex; gap:10px; align-items:flex-start; }
+    .filter-row { display:flex; gap:6px; align-items:center; margin-bottom:8px; }
+    .filter-row .form-control { height:38px; }
+    .btn-ghost { background:transparent; border:1px dashed #ccc; color:#444; }
+    .badge-type { font-size:0.8rem; }
+    .select2-container--bootstrap5 .select2-selection { height: calc(2.25rem + 2px); padding:.375rem .75rem; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <h3>Self-Service Query Builder — Drag & Drop</h3>
+  <p class="small">MC Customer & MC Developer both support Create New / Edit Existing. Drag tables/columns/filters into the builder areas — everything updates the generated SQL in real time.</p>
+
+  <!-- Role + Action -->
+  <div class="panel row gx-3 gy-2 align-items-end">
+    <div class="col-md-3">
+      <label class="form-label">Role</label>
+      <select id="roleSelect" class="form-select">
+        <option value="">-- select role --</option>
+        <option value="MC Customer">MC Customer</option>
+        <option value="MC Developer">MC Developer</option>
+      </select>
+    </div>
+
+    <div class="col-md-3">
+      <label class="form-label">Action</label>
+      <select id="actionSelect" class="form-select" disabled>
+        <option value="">-- select action --</option>
+        <option value="create">Create New Report</option>
+        <option value="edit">Edit Existing Report</option>
+      </select>
+    </div>
+
+    <div class="col-md-4" id="reportsCol" style="display:none">
+      <label class="form-label">Existing Reports</label>
+      <select id="reportSelect" class="form-select">
+        <option value="">-- choose report --</option>
+      </select>
+    </div>
+
+    <div class="col-md-2 text-end">
+      <label class="form-label">Query Type</label>
+      <select id="queryType" class="form-select">
+        <option>Oracle</option>
+        <option>Databricks</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Main UI: left = palette, right = builder -->
+  <div class="row">
+    <!-- Left: Palette -->
+    <div class="col-md-4">
+      <div class="panel">
+        <h6>Available Tables</h6>
+        <div id="tablesPalette" class="pick-list" aria-label="tables-palette">
+          <!-- filled by JS -->
+        </div>
+        <p class="drag-hint small">Drag a table into Selected Tables area. Or click to add.</p>
+
+        <hr/>
+
+        <h6>Available Columns (for selected table)</h6>
+        <div id="columnsPalette" class="pick-list">
+          <div class="small text-muted">Select table on right to list its columns, or drag a table here to see columns.</div>
+        </div>
+        <p class="drag-hint small">Drag a column into Selected Columns or into Filters to create a filter.</p>
+
+        <hr/>
+
+        <h6>Quick Filters (drag to Filters)</h6>
+        <div id="quickFilters" class="pick-list small">
+          <!-- built from table metadata -->
+        </div>
+      </div>
+
+      <!-- Trash area -->
+      <div class="panel mt-2 text-center">
+        <div id="trash" class="trash">Drag here to remove</div>
+      </div>
+    </div>
+
+    <!-- Right: Builder -->
+    <div class="col-md-8">
+      <div class="panel">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <h6 class="mb-0">Builder</h6>
+          <div>
+            <button id="rawEditToggle" class="btn btn-sm btn-outline-secondary">Toggle Raw Edit</button>
+          </div>
+        </div>
+
+        <div class="row mb-2">
+          <div class="col-md-6">
+            <label class="form-label">Selected Tables (drop here)</label>
+            <div id="selectedTables" class="drop-target pick-list" aria-label="selected-tables"></div>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">Selected Columns (drop here)</label>
+            <div id="selectedColumns" class="drop-target pick-list" aria-label="selected-columns"></div>
+          </div>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">Filters (drop column here or click Add Filter)</label>
+          <div id="filtersArea" class="drop-target" style="min-height:60px; padding:8px; border-radius:6px;"></div>
+          <div class="mt-2">
+            <button id="addFilterBtn" class="btn btn-sm btn-outline-primary">+ Add Filter</button>
+            <button id="clearFiltersBtn" class="btn btn-sm btn-outline-danger">Clear Filters</button>
+          </div>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">Generated Query</label>
+          <textarea id="generatedQuery" rows="7" class="form-control"></textarea>
+        </div>
+
+        <div class="d-flex gap-2">
+          <button id="previewBtn" class="btn btn-primary">Preview (10 rows)</button>
+          <button id="saveBtn" class="btn btn-warning">Save (temp)</button>
+          <button id="submitBtn" class="btn btn-success">Submit (save report)</button>
+          <div class="ms-auto">
+            <span class="small text-muted">Drag & drop supported • Click items to quick-add</span>
+          </div>
+        </div>
+
+        <div id="previewPanel" style="display:none" class="mt-3">
+          <h6 class="mt-3">Preview</h6>
+          <div id="previewNotice" class="small text-muted mb-2"></div>
+          <div class="table-responsive"><table id="previewTable" class="table table-sm table-bordered"></table></div>
+        </div>
+      </div>
+
+      <!-- Raw editor -->
+      <div id="rawEditor" class="panel" style="display:none; margin-top:12px;">
+        <label class="form-label">Raw Query Editor</label>
+        <textarea id="rawQuery" rows="6" class="form-control"></textarea>
+        <div class="mt-2">
+          <button id="rawPreviewBtn" class="btn btn-primary btn-sm">Preview Raw</button>
+          <button id="applyRawBtn" class="btn btn-secondary btn-sm">Apply to Builder</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- libs -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jqueryui/1.13.2/jquery-ui.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/5.3.2/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/js/select2.full.min.js"></script>
+
+<script>
+/* ----------------------
+   Metadata and storage
+   ---------------------- */
+const METADATA = {
+  tables: {
+    customers: ["id","name","email","city","created_at"],
+    orders: ["id","customer_id","product_id","order_date","quantity","amount","status"],
+    products: ["id","name","price","stock","category"]
+  },
+  relationships: [
+    { leftTable: "customers", leftCol:"id", rightTable:"orders", rightCol:"customer_id" },
+    { leftTable: "products", leftCol:"id", rightTable:"orders", rightCol:"product_id" }
+  ],
+  sampleReports: {
+    salesReport: `SELECT products.id AS product_id, products.name AS product_name, SUM(orders.quantity) AS total_qty
+FROM products
+JOIN orders ON products.id = orders.product_id
+GROUP BY products.id, products.name;`,
+    customerOrders: `SELECT customers.id AS customer_id, customers.name, orders.id AS order_id, orders.order_date, orders.status
+FROM customers
+JOIN orders ON customers.id = orders.customer_id
+ORDER BY orders.order_date DESC;`,
+    inventoryStatus: `SELECT id AS product_id, name AS product_name, stock
+FROM products
+WHERE stock < 50;`
+  }
+};
+
+// utility
+function mkOpt(val, label){ return $('<option>').val(val).text(label); }
+function sanitizeKey(s){ return s.replace(/\s+/g,'').replace(/[^a-zA-Z0-9_]/g,''); }
+
+/* ----------------------
+   Initialization
+   ---------------------- */
+$(function(){
+  initPalettes();
+  initDragDrop();
+  initUIEvents();
+  loadReportsToDropdown();
+});
+
+/* ----------------------
+   UI Init
+   ---------------------- */
+function initPalettes(){
+  // fill tables palette
+  const tpal = $('#tablesPalette').empty();
+  Object.keys(METADATA.tables).forEach(t => {
+    const item = $('<div class="pick-item" data-type="table">')
+      .attr('data-table', t)
+      .text(t)
+      .append($('<span class="badge bg-light text-muted ms-2 badge-type">table</span>'));
+    tpal.append(item);
+  });
+
+  // quick filters palette
+  const qf = $('#quickFilters').empty();
+  qf.append('<div class="small text-muted mb-2">Drop into Filters or click to add</div>');
+  // make some example filter items
+  qf.append($('<div class="pick-item" data-type="quickfilter" data-filter="orders.status = \'COMPLETE\'">orders.status = COMPLETE</div>'));
+  qf.append($('<div class="pick-item" data-type="quickfilter" data-filter="products.stock < 10">products.stock < 10</div>'));
+  qf.append($('<div class="pick-item" data-type="quickfilter" data-filter="customers.city = \'Bengaluru\'">customers.city = Bengaluru</div>'));
+}
+
+/* ----------------------
+   Drag & Drop
+   ---------------------- */
+function initDragDrop(){
+  // make palette items draggable
+  $(document).on('mouseenter', '.pick-item', function(){
+    if (!$(this).data('ui-draggable')) {
+      $(this).draggable({
+        helper: 'clone',
+        revert: 'invalid',
+        zIndex: 100,
+        cursor: 'grabbing',
+        appendTo: 'body'
+      });
+    }
+  });
+
+  // selectedTables drop target
+  $('#selectedTables').droppable({
+    accept: '.pick-item[data-type="table"]',
+    hoverClass: 'ui-state-highlight',
+    drop: function(event, ui){
+      const table = ui.draggable.data('table');
+      addTableToSelected(table);
+    }
+  });
+
+  // selectedColumns drop target (accept columns or table (to add its columns))
+  $('#selectedColumns').droppable({
+    accept: '.pick-item',
+    hoverClass: 'ui-state-highlight',
+    drop: function(event, ui){
+      const type = ui.draggable.data('type');
+      if (type === 'table') {
+        const table = ui.draggable.data('table');
+        // add all columns optionally, or show columns to pick — we'll add all for convenience
+        METADATA.tables[table].forEach(col => addColumnToSelected(`${table}.${col}`));
+      } else if (type === 'column') {
+        addColumnToSelected(ui.draggable.data('col'));
+      }
+    }
+  });
+
+  // filtersArea drop target: accept columns or quickfilters
+  $('#filtersArea').droppable({
+    accept: '.pick-item',
+    hoverClass: 'ui-state-highlight',
+    drop: function(event, ui){
+      const type = ui.draggable.data('type');
+      if (type === 'column') {
+        const col = ui.draggable.data('col'); // e.g. table.col
+        const parts = col.split('.');
+        addFilterRow({table: parts[0], column: parts[1], op:'=', value:''});
+      } else if (type === 'table') {
+        // if table dropped to filters, add a default filter (e.g., table.id > 0)
+        const table = ui.draggable.data('table');
+        addFilterRow({table: table, column: METADATA.tables[table][0], op:'=', value:''});
+      } else if (type === 'quickfilter') {
+        const filter = ui.draggable.data('filter');
+        addFilterFromText(filter);
+      }
+      buildGeneratedQuery();
+    }
+  });
+
+  // trash droppable (remove)
+  $('#trash').droppable({
+    accept: '.selected-table, .selected-column, .filter-row',
+    hoverClass: 'ui-state-highlight',
+    drop: function(event, ui){
+      const el = ui.draggable;
+      if (el.hasClass('selected-table')) {
+        const t = el.data('table');
+        removeTableFromSelected(t);
+      } else if (el.hasClass('selected-column')) {
+        const col = el.data('col');
+        removeColumnFromSelected(col);
+      } else if (el.hasClass('filter-row')) {
+        el.remove();
+      }
+      buildGeneratedQuery();
+    }
+  });
+
+  // click-to-add behavior for pick items
+  $(document).on('click', '.pick-item', function(){
+    const type = $(this).data('type');
+    if (type === 'table') {
+      addTableToSelected($(this).data('table'));
+    } else if (type === 'column') {
+      addColumnToSelected($(this).data('col'));
+    } else if (type === 'quickfilter') {
+      addFilterFromText($(this).data('filter'));
+    }
+  });
+}
+
+/* ----------------------
+   Builder helpers
+   ---------------------- */
+function addTableToSelected(table) {
+  // if already present, ignore
+  if ($('#selectedTables .selected-table[data-table="'+table+'"]').length) return;
+  const item = $(`<div class="selected-table pick-item" data-table="${table}">`)
+    .append(`<strong>${table}</strong> <span class="badge bg-light text-muted ms-2 badge-type">table</span>`)
+    .append(`<div class="small text-muted">columns: ${METADATA.tables[table].length}</div>`);
+  // add remove icon
+  const rem = $('<button class="btn btn-sm btn-ghost ms-2" title="remove">Remove</button>');
+  rem.on('click', ()=> { removeTableFromSelected(table); buildGeneratedQuery(); });
+  item.append(rem);
+  $('#selectedTables').append(item);
+  // make item draggable to trash
+  item.draggable({ helper: 'clone', revert: 'invalid', appendTo: 'body' });
+  // refresh columns palette to show columns for most recently selected table
+  refreshColumnsPalette();
+  buildGeneratedQuery();
+}
+
+function removeTableFromSelected(table) {
+  // remove selected-table element
+  $('#selectedTables .selected-table[data-table="'+table+'"]').remove();
+  // remove selectedColumns that belong to this table
+  $('#selectedColumns .selected-column').each(function(){
+    if ($(this).data('col').startsWith(table + '.')) $(this).remove();
+  });
+  // update columns palette
+  refreshColumnsPalette();
+}
+
+function refreshColumnsPalette() {
+  const selTables = getSelectedTables();
+  const pal = $('#columnsPalette').empty();
+  if (selTables.length === 0) {
+    pal.append('<div class="small text-muted">Select or drag a table to the left to see its columns here.</div>');
+    return;
+  }
+  selTables.forEach(t => {
+    const header = $(`<div class="small text-muted mt-1 mb-1"><strong>${t}</strong></div>`);
+    pal.append(header);
+    METADATA.tables[t].forEach(c => {
+      const col = `${t}.${c}`;
+      const item = $(`<div class="pick-item" data-type="column" data-col="${col}">`).text(col)
+        .append($('<span class="badge bg-light text-muted ms-2 badge-type">col</span>'));
+      pal.append(item);
+    });
+  });
+  // make new pick-items draggable
+  pal.find('.pick-item').draggable({ helper:'clone', revert:'invalid', appendTo: 'body' });
+}
+
+/* Selected columns */
+function addColumnToSelected(col) {
+  if ($('#selectedColumns .selected-column[data-col="'+col+'"]').length) return;
+  const item = $(`<div class="selected-column pick-item" data-col="${col}">`).text(col)
+    .append($('<span class="badge bg-light text-muted ms-2 badge-type">col</span>'));
+  const rem = $('<button class="btn btn-sm btn-ghost ms-2" title="remove">Remove</button>');
+  rem.on('click', ()=> { removeColumnFromSelected(col); buildGeneratedQuery(); });
+  item.append(rem);
+  $('#selectedColumns').append(item);
+  item.draggable({ helper:'clone', revert:'invalid', appendTo:'body' });
+}
+
+/* remove column */
+function removeColumnFromSelected(col) {
+  $('#selectedColumns .selected-column[data-col="'+col+'"]').remove();
+}
+
+/* Get selected tables/columns arrays */
+function getSelectedTables() {
+  return $('#selectedTables .selected-table').map(function(){ return $(this).data('table'); }).get();
+}
+function getSelectedColumns() {
+  return $('#selectedColumns .selected-column').map(function(){ return $(this).data('col'); }).get();
+}
+
+/* ----------------------
+   Filters: add / remove / text add
+   ---------------------- */
+
+function addFilterRow(prefill) {
+  // prefill: {table, column, op, value}
+  const wrapper = $('<div class="filter-row pick-item filter-row" style="background:#fff;border:1px solid #eee;padding:6px;border-radius:6px;">')
+    .addClass('filter-row');
+
+  const tableSel = $('<select class="form-select filter-table" style="width:22%"></select>');
+  tableSel.append(mkOpt('', '--table--'));
+  // use selected tables preferentially
+  const selectedTables = getSelectedTables();
+  const choices = selectedTables.length ? selectedTables : Object.keys(METADATA.tables);
+  choices.forEach(t => tableSel.append(mkOpt(t, t)));
+
+  const colSel = $('<select class="form-select filter-col" style="width:30%"></select>');
+  colSel.append(mkOpt('', '--column--'));
+
+  const opSel = $('<select class="form-select filter-op" style="width:18%"><option>=</option><option>!=</option><option>&gt;</option><option>&lt;</option><option>&gt;=</option><option>&lt;=</option><option>LIKE</option></select>');
+
+  const valInp = $('<input class="form-control filter-val" placeholder="value" style="width:28%"/>');
+
+  const remBtn = $('<button class="btn btn-sm btn-outline-danger" title="Remove">X</button>');
+  remBtn.on('click', function(){ wrapper.remove(); buildGeneratedQuery(); });
+
+  wrapper.append(tableSel).append(colSel).append(opSel).append(valInp).append(remBtn);
+  // when table changes, populate columns
+  tableSel.on('change', function(){
+    const t = $(this).val();
+    colSel.empty(); colSel.append(mkOpt('', '--column--'));
+    if (t && METADATA.tables[t]) {
+      METADATA.tables[t].forEach(c => colSel.append(mkOpt(c, c)));
+    }
+    buildGeneratedQuery();
+  });
+  // column/op/val change => update
+  wrapper.on('change keyup', '.filter-col, .filter-op, .filter-val', function(){ buildGeneratedQuery(); });
+
+  if (prefill) {
+    if (prefill.table) tableSel.val(prefill.table).trigger('change');
+    if (prefill.column) {
+      // set after a tiny delay to ensure columns populated
+      setTimeout(()=> colSel.val(prefill.column).trigger('change'), 50);
+    }
+    if (prefill.op) opSel.val(prefill.op);
+    if (prefill.value) valInp.val(prefill.value);
+  }
+
+  $('#filtersArea').append(wrapper);
+  wrapper.addClass('filter-row'); // so trash accepts it
+  wrapper.draggable({ helper:'clone', revert:'invalid', appendTo:'body' });
+}
+
+/* add filter from raw text like "orders.status = 'COMPLETE'" */
+function addFilterFromText(text) {
+  // try to parse table.col op value
+  const m = text.match(/([a-z0-9_]+)\.([a-z0-9_]+)\s*(=|!=|>|<|>=|<=|like)\s*'?([^']*)'?/i);
+  if (m) {
+    addFilterRow({table:m[1], column:m[2], op:m[3].toUpperCase(), value:m[4]});
+  } else {
+    // fallback: add into value of generic filter
+    addFilterRow({table:'', column:'', op:'=', value:text});
+  }
+}
+
+/* clear filters */
+$('#clearFiltersBtn').on('click', function(){ $('#filtersArea').empty(); buildGeneratedQuery(); });
+
+/* Add filter button */
+$('#addFilterBtn').on('click', function(){ addFilterRow(); });
+
+/* ----------------------
+   Reports storage + parsing
+   ---------------------- */
+
+function loadReportsToDropdown(){
+  const sel = $('#reportSelect').empty();
+  sel.append(mkOpt('', '-- choose report --'));
+  // sample first
+  for (const key of Object.keys(METADATA.sampleReports)) {
+    sel.append(mkOpt(key, prettifyKey(key) + ' (sample)'));
+  }
+  // saved reports
+  const saved = JSON.parse(localStorage.getItem('ssqb_saved_reports') || '{}');
+  for (const key of Object.keys(saved)) {
+    sel.append(mkOpt(key, prettifyKey(key) + ' (saved)'));
+  }
+}
+
+function prettifyKey(k){ return k.replace(/([A-Z])/g,' $1').replace(/^./, c => c.toUpperCase()); }
+
+/* When role changes */
+$('#roleSelect').on('change', function(){
+  const r = $(this).val();
+  $('#actionSelect').prop('disabled', !r).val('');
+  $('#reportsCol').hide();
+  $('#builderPanel').hide();
+  $('#generatedQuery').val('');
+  $('#previewPanel').hide();
+  $('#rawEditor').hide();
+  $('#selectedTables').empty();
+  $('#selectedColumns').empty();
+  $('#filtersArea').empty();
+});
+
+/* Action change */
+$('#actionSelect').on('change', function(){
+  const a = $(this).val();
+  $('#previewPanel').hide();
+  $('#rawEditor').hide();
+  $('#generatedQuery').val('');
+  $('#selectedTables').empty();
+  $('#selectedColumns').empty();
+  $('#filtersArea').empty();
+  if (a === 'edit') {
+    $('#reportsCol').show();
+    $('#builderPanel').show();
+  } else if (a === 'create') {
+    $('#reportsCol').hide();
+    $('#builderPanel').show();
+  } else {
+    $('#builderPanel').hide();
+  }
+});
+
+/* Report select */
+$('#reportSelect').on('change', function(){
+  const key = $(this).val();
+  if (!key) return;
+  const saved = JSON.parse(localStorage.getItem('ssqb_saved_reports') || '{}');
+  const sql = saved[key] || METADATA.sampleReports[key];
+  if (!sql) { alert('Report SQL not found'); return; }
+  $('#generatedQuery').val(sql);
+  parseQueryToBuilder(sql);
+  $('#previewPanel').hide();
+});
+
+/* parse a SQL (best-effort) */
+function parseQueryToBuilder(sql){
+  // best-effort parsing: find FROM and JOINs for known tables, map SELECT columns
+  $('#selectedTables').empty();
+  $('#selectedColumns').empty();
+  $('#filtersArea').empty();
+
+  try {
+    const lower = sql.toLowerCase();
+    // find FROM first table
+    const fromMatch = sql.match(/\bfrom\s+([a-z0-9_\."]+)/i);
+    const fromTbl = fromMatch ? cleanFromToken(fromMatch[1]) : null;
+    const joinMatches = [...sql.matchAll(/\bjoin\s+([a-z0-9_\."]+)/ig)].map(m => cleanFromToken(m[1]));
+    const tables = [];
+    if (fromTbl) tables.push(fromTbl);
+    joinMatches.forEach(j => { if (j && !tables.includes(j)) tables.push(j); });
+    // add known tables
+    const known = Object.keys(METADATA.tables);
+    const selected = tables.filter(t => known.includes(t));
+    selected.forEach(t => addTableToSelected(t));
+    // parse SELECT columns
+    const selMatch = sql.match(/\bselect\s+([\s\S]*?)\s+from\s+/i);
+    if (selMatch) {
+      const cols = selMatch[1].split(',').map(s => s.trim());
+      // try to map to table.column
+      cols.forEach(c => {
+        // remove aliases "as x"
+        const main = c.split(/\s+as\s+/i)[0].trim();
+        if (main.includes('.')) addColumnToSelected(main);
+        else {
+          // try to find which selected table contains this column
+          for (const t of selected) {
+            if (METADATA.tables[t] && METADATA.tables[t].includes(main.replace(/["'`]/g,''))) {
+              addColumnToSelected(`${t}.${main}`);
+              break;
+            }
+          }
+        }
+      });
+    }
+    // parse simple WHERE conditions into filters
+    const whereMatch = sql.match(/\bwhere\s+([\s\S]*?)(?:group\s+by|order\s+by|;|$)/i);
+    if (whereMatch) {
+      const where = whereMatch[1];
+      // split by AND
+      const conds = where.split(/\s+and\s+/i);
+      conds.forEach(cond => {
+        const m = cond.match(/([a-z0-9_]+\.)?([a-z0-9_]+)\s*(=|!=|>|<|>=|<=|like)\s*('?)([^']*?)\4/i);
+        if (m) {
+          const tbl = m[1] ? m[1].slice(0,-1) : (selected[0] || '');
+          const col = m[2];
+          const op = m[3].toUpperCase();
+          const val = m[5];
+          addFilterRow({table: tbl, column: col, op: op, value: val});
+        }
+      });
+    }
+  } catch (err) {
+    console.warn('parseQueryToBuilder failed', err);
+  }
+
+  refreshColumnsPalette();
+  buildGeneratedQuery();
+}
+
+function cleanFromToken(tok) {
+  return tok.replace(/["'`]/g,'').split(/\s+/)[0].split('.')[0];
+}
+
+/* ----------------------
+   Query generation
+   ---------------------- */
+function buildGeneratedQuery() {
+  const tables = getSelectedTables();
+  const cols = getSelectedColumns(); // array of table.col
+  let selectClause;
+  if (cols.length) selectClause = cols.join(', ');
+  else if (tables.length) selectClause = tables.map(t => `${t}.*`).join(', ');
+  else selectClause = '*';
+
+  // build FROM + JOINs (simple heuristics using METADATA.relationships)
+  let fromClause = '';
+  if (tables.length) {
+    const included = new Set();
+    const joins = [];
+    const first = tables[0];
+    included.add(first);
+    fromClause = `${first}`;
+    for (let i = 1; i < tables.length; i++) {
+      const t = tables[i];
+      // find rel connecting t to any included
+      const rel = METADATA.relationships.find(r => (r.leftTable === t && included.has(r.rightTable)) || (r.rightTable === t && included.has(r.leftTable)));
+      if (rel) {
+        if (included.has(rel.leftTable)) {
+          joins.push(`JOIN ${rel.rightTable} ON ${rel.leftTable}.${rel.leftCol} = ${rel.rightTable}.${rel.rightCol}`);
+          included.add(rel.rightTable);
+        } else {
+          joins.push(`JOIN ${rel.leftTable} ON ${rel.rightTable}.${rel.rightCol} = ${rel.leftTable}.${rel.leftCol}`);
+          included.add(rel.leftTable);
+        }
+      } else {
+        joins.push(`LEFT JOIN ${t} ON 1=1 -- TODO: add join condition`);
+        included.add(t);
+      }
+    }
+    if (joins.length) fromClause += '\n' + joins.join('\n');
+  }
+
+  // where filters
+  const filters = [];
+  $('#filtersArea .filter-row').each(function(){
+    const table = $(this).find('.filter-table').val();
+    const column = $(this).find('.filter-col').val();
+    const op = $(this).find('.filter-op').val();
+    const val = $(this).find('.filter-val').val();
+    if (table && column && op && (val !== undefined && val !== '')) {
+      if (op.toUpperCase() === 'LIKE') filters.push(`${table}.${column} ${op} '%${val}%'`);
+      else filters.push(`${table}.${column} ${op} '${val}'`);
+    }
+  });
+
+  let q = '';
+  if (!fromClause) q = `SELECT ${selectClause};`;
+  else q = `SELECT ${selectClause}\nFROM ${fromClause}${filters.length ? '\nWHERE ' + filters.join(' AND ') : ''};`;
+
+  $('#generatedQuery').val(q);
+  return q;
+}
+
+/* ----------------------
+   Preview / mock preview
+   ---------------------- */
+function previewQuery(){
+  const q = $('#generatedQuery').val();
+  if (!q || !q.trim()) { alert('Generate a query first'); return; }
+  const target = $('#queryType').val();
+  $('#previewPanel').show(); $('#previewNotice').text('Trying server preview (POST /api/preview)...');
+
+  $.ajax({
+    url: '/api/preview',
+    method: 'POST',
+    contentType: 'application/json',
+    data: JSON.stringify({ query: q, target }),
+    timeout: 4000
+  }).done(function(data){
+    $('#previewNotice').text('Preview from server (first up to 10 rows):');
+    renderPreviewTable(data);
+  }).fail(function(){
+    const mock = mockPreviewFromQuery(q);
+    $('#previewNotice').text('Server preview failed — showing mock preview:');
+    renderPreviewTable(mock);
+  });
+}
+
+function mockPreviewFromQuery(sql){
+  const selectMatch = sql.match(/select\s+([\s\S]*?)\s+from\s+/i);
+  let cols = [];
+  if (selectMatch) {
+    cols = selectMatch[1].split(',').map(s=>s.trim()).slice(0,10);
+    cols = cols.map(c => c.split(/\s+as\s+/i)[0].trim());
+  }
+  if (!cols.length) cols = ['col1','col2','col3'];
+  const rows = [];
+  for (let i=1;i<=6;i++){
+    const r = {};
+    cols.forEach(c => {
+      const name = c.includes('.') ? c.split('.')[1] : c.replace(/[^a-z0-9_]/ig,'');
+      r[c] = sampleValueForColumn(name, i);
+    });
+    rows.push(r);
+  }
+  return { columns: cols, rows };
+}
+function sampleValueForColumn(name, i){
+  const n = name.toLowerCase();
+  if (n.includes('id')) return i;
+  if (n.includes('name')) return 'Name ' + i;
+  if (n.includes('email')) return `user${i}@example.com`;
+  if (n.includes('date')) return `2024-0${(i%9)+1}-01`;
+  if (n.includes('price')||n.includes('amount')) return (i*12.5).toFixed(2);
+  return 'val_'+i;
+}
+function renderPreviewTable(data){
+  const cols = data.columns || (data.rows && Object.keys(data.rows[0]) || []);
+  const table = $('#previewTable').empty();
+  const thead = $('<thead>').appendTo(table); const trh = $('<tr>').appendTo(thead);
+  cols.forEach(c => $('<th>').text(c).appendTo(trh));
+  const tbody = $('<tbody>').appendTo(table);
+  (data.rows || []).forEach(row => {
+    const tr = $('<tr>').appendTo(tbody);
+    cols.forEach(c => $('<td>').text(row[c] === undefined ? '' : row[c]).appendTo(tr));
+  });
+}
+
+/* ----------------------
+   Save / Submit behavior
+   ---------------------- */
+function saveTempDraft(){
+  const draft = {
+    query: $('#generatedQuery').val(),
+    target: $('#queryType').val(),
+    savedAt: Date.now()
+  };
+  sessionStorage.setItem('ssqb_temp_draft', JSON.stringify(draft));
+  alert('Temporary draft saved to sessionStorage.');
+}
+
+function submitReport(){
+  const sql = $('#generatedQuery').val();
+  if (!sql || !sql.trim()) { alert('Generate a query first'); return; }
+  const name = prompt('Enter a unique key for the report (e.g., monthlySalesReport):');
+  if (!name) { alert('Submit cancelled'); return; }
+  const key = sanitizeKey(name);
+  const stored = JSON.parse(localStorage.getItem('ssqb_saved_reports') || '{}');
+  stored[key] = sql;
+  localStorage.setItem('ssqb_saved_reports', JSON.stringify(stored));
+  alert('Report saved locally. It will appear in Existing Reports dropdown.');
+  loadReportsToDropdown();
+}
+
+/* ----------------------
+   Raw editor flows
+   ---------------------- */
+$('#rawEditToggle').on('click', function(){ $('#rawEditor').toggle(); });
+$('#rawPreviewBtn').on('click', function(){ const sql = $('#rawQuery').val(); previewRaw(sql); });
+$('#applyRawBtn').on('click', function(){ const sql = $('#rawQuery').val(); $('#generatedQuery').val(sql); parseQueryToBuilder(sql); });
+
+function previewRaw(sql){
+  if (!sql || !sql.trim()) { alert('Paste SQL in raw editor'); return; }
+  const prev = $('#generatedQuery').val();
+  $('#generatedQuery').val(sql);
+  previewQuery();
+  $('#generatedQuery').val(prev);
+}
+
+/* ----------------------
+   Utilities / events
+   ---------------------- */
+function initUIEvents(){
+  // when user clicks action select after role set
+  $('#roleSelect').on('change', function(){
+    const role = $(this).val();
+    $('#actionSelect').prop('disabled', !role);
+    $('#actionSelect').val('');
+  });
+
+  // when user manually clicks to add a table or column from lists (quick add)
+  $(document).on('click', '.selected-table .btn-ghost, .selected-column .btn-ghost', function(e){ e.stopPropagation(); });
+  // click on table palette item handled earlier
+  // when columns palette items are created they are clickable: the click handler is added in initDragDrop (delegated)
+  // keep generated query updated when columns/tables removed by click
+  $('#selectedTables, #selectedColumns, #filtersArea').on('DOMSubtreeModified', function(){ buildGeneratedQuery(); });
+
+  // click preview/save/submit
+  $('#previewBtn').on('click', previewQuery);
+  $('#saveBtn').on('click', saveTempDraft);
+  $('#submitBtn').on('click', submitReport);
+
+  // add action select changes also show/hide builder
+  $('#actionSelect').on('change', function(){ $('#builderPanel').toggle($(this).val() !== ''); $('#reportsCol').toggle($(this).val()==='edit'); });
+
+  // clicking on selectedTables items focuses columns palette
+  $('#selectedTables').on('click', '.selected-table', function(){ refreshColumnsPalette(); });
+
+  // double-click selectedColumns to remove
+  $('#selectedColumns').on('dblclick', '.selected-column', function(){ $(this).remove(); buildGeneratedQuery(); });
+
+  // allow clicking on a column pick-item to add single column
+  $(document).on('click', '.pick-item[data-type="column"]', function(){ addColumnToSelected($(this).data('col')); buildGeneratedQuery(); });
+
+  // ensure builder updates when query type changed
+  $('#queryType').on('change', buildGeneratedQuery);
+}
+
+/* ----------------------
+   Helpers for initial state
+   ---------------------- */
+function getSelectedTablesCount(){ return $('#selectedTables .selected-table').length; }
+function getSelectedColumnsCount(){ return $('#selectedColumns .selected-column').length; }
+
+/* ----------------------
+   Parse/Load saved reports and set action select enabling on role change
+   ---------------------- */
+// load reports on start
+loadReportsToDropdown();
+
+/* End of script */
+</script>
+</body>
+</html>

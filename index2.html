@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>jQuery Self-Service Query Builder</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+</head>
+<body class="p-4">
+<div class="container">
+    <h2>Self Service Query Builder (jQuery)</h2>
+    
+    <!-- User Role -->
+    <div class="mb-3">
+        <label class="form-label">Select Role</label>
+        <select id="roleSelect" class="form-select">
+            <option value="">-- Select --</option>
+            <option value="MC Developer">MC Developer</option>
+            <option value="MC Customer">MC Customer</option>
+        </select>
+    </div>
+
+    <!-- Customer Options -->
+    <div id="customerOptions" class="mb-3" style="display:none;">
+        <label class="form-label">Customer Options</label>
+        <select id="customerAction" class="form-select">
+            <option value="">-- Select --</option>
+            <option value="New Report">New Report</option>
+            <option value="Edit existing report">Edit existing report</option>
+        </select>
+    </div>
+
+    <!-- Prefilled Query -->
+    <div id="prefilledQueryContainer" class="mb-3" style="display:none;">
+        <label class="form-label">Prefilled Query</label>
+        <textarea id="prefilledQuery" class="form-control" rows="3">SELECT c.name, o.order_date 
+FROM Customers c 
+JOIN Orders o ON c.id = o.customer_id;</textarea>
+    </div>
+
+    <!-- Table & Column Selection -->
+    <div id="tableColumnSection" style="display:none;">
+        <h5>Select Tables & Columns</h5>
+        <div id="tableColumnContainer"></div>
+        <button id="addTableColumn" class="btn btn-sm btn-secondary my-2">+ Add Table & Columns</button>
+
+        <h5>Filters</h5>
+        <div id="filterContainer"></div>
+        <button id="addFilter" class="btn btn-sm btn-secondary my-2">+ Add Filter</button>
+
+        <h5>Generated Query</h5>
+        <textarea id="generatedQuery" class="form-control" rows="5"></textarea>
+        
+        <div class="my-3">
+            <label class="form-label">Query Type</label>
+            <select id="queryType" class="form-select">
+                <option value="oracle">Oracle</option>
+                <option value="databricks">Databricks</option>
+            </select>
+        </div>
+
+        <button class="btn btn-primary me-2" id="previewBtn">Preview</button>
+        <button class="btn btn-warning me-2" id="saveBtn">Save</button>
+        <button class="btn btn-success" id="submitBtn">Submit</button>
+    </div>
+</div>
+
+<script>
+// Dummy metadata
+const tables = {
+    Customers: ["id", "name", "email", "city"],
+    Orders: ["id", "customer_id", "order_date", "amount"],
+    Products: ["id", "name", "price", "stock"]
+};
+
+const filterOps = ["=", ">", "<", ">=", "<=", "LIKE"];
+
+function updateGeneratedQuery() {
+    let selectedTables = [];
+    let selectedColumns = [];
+    let joins = [];
+    let filters = [];
+
+    // Collect tables and columns
+    $(".table-select").each(function(i){
+        let table = $(this).val();
+        if(table && !selectedTables.includes(table)) selectedTables.push(table);
+
+        let cols = $(this).closest(".table-column-row").find(".column-select").val();
+        if(cols && cols.length > 0) {
+            cols.forEach(col => selectedColumns.push(`${table}.${col}`));
+        }
+    });
+
+    // Collect filters
+    $(".filter-row").each(function(){
+        let table = $(this).find(".filter-table").val();
+        let column = $(this).find(".filter-column").val();
+        let op = $(this).find(".filter-op").val();
+        let val = $(this).find(".filter-value").val();
+        if(table && column && op && val) {
+            if(op === "LIKE") {
+                filters.push(`${table}.${column} ${op} '%${val}%'`);
+            } else {
+                filters.push(`${table}.${column} ${op} '${val}'`);
+            }
+        }
+    });
+
+    // Build SQL
+    let query = `SELECT ${selectedColumns.join(", ")}\nFROM ${selectedTables.join(", ")}`;
+    if(filters.length > 0) {
+        query += `\nWHERE ${filters.join(" AND ")}`;
+    }
+
+    $("#generatedQuery").val(query);
+}
+
+function addTableColumnRow() {
+    let row = $(`<div class="table-column-row row mb-2">
+        <div class="col-md-4">
+            <select class="form-select table-select">
+                <option value="">-- Select Table --</option>
+                ${Object.keys(tables).map(t => `<option value="${t}">${t}</option>`).join("")}
+            </select>
+        </div>
+        <div class="col-md-8">
+            <select multiple class="form-select column-select"></select>
+        </div>
+    </div>`);
+
+    row.find(".table-select").change(function(){
+        let table = $(this).val();
+        let colSelect = $(this).closest(".table-column-row").find(".column-select");
+        colSelect.empty();
+        if(table) {
+            tables[table].forEach(c => colSelect.append(`<option value="${c}">${c}</option>`));
+        }
+        updateGeneratedQuery();
+    });
+
+    row.find(".column-select").change(updateGeneratedQuery);
+    $("#tableColumnContainer").append(row);
+}
+
+function addFilterRow() {
+    let row = $(`<div class="filter-row row mb-2">
+        <div class="col-md-3">
+            <select class="form-select filter-table">
+                <option value="">-- Table --</option>
+                ${Object.keys(tables).map(t => `<option value="${t}">${t}</option>`).join("")}
+            </select>
+        </div>
+        <div class="col-md-3">
+            <select class="form-select filter-column"></select>
+        </div>
+        <div class="col-md-2">
+            <select class="form-select filter-op">
+                ${filterOps.map(op => `<option value="${op}">${op}</option>`).join("")}
+            </select>
+        </div>
+        <div class="col-md-4">
+            <input type="text" class="form-control filter-value" placeholder="Value">
+        </div>
+    </div>`);
+
+    row.find(".filter-table").change(function(){
+        let table = $(this).val();
+        let colSelect = $(this).closest(".filter-row").find(".filter-column");
+        colSelect.empty();
+        if(table) {
+            tables[table].forEach(c => colSelect.append(`<option value="${c}">${c}</option>`));
+        }
+    });
+
+    row.find(".filter-column, .filter-op, .filter-value").change(updateGeneratedQuery);
+    $("#filterContainer").append(row);
+}
+
+$(document).ready(function(){
+    $("#roleSelect").change(function(){
+        let role = $(this).val();
+        if(role === "MC Customer") {
+            $("#customerOptions").show();
+            $("#tableColumnSection").hide();
+        } else if(role === "MC Developer") {
+            $("#customerOptions").hide();
+            $("#prefilledQueryContainer").hide();
+            $("#tableColumnSection").show();
+        } else {
+            $("#customerOptions").hide();
+            $("#tableColumnSection").hide();
+        }
+    });
+
+    $("#customerAction").change(function(){
+        let action = $(this).val();
+        if(action === "Edit existing report") {
+            $("#prefilledQueryContainer").show();
+        } else {
+            $("#prefilledQueryContainer").hide();
+        }
+        $("#tableColumnSection").show();
+    });
+
+    $("#addTableColumn").click(addTableColumnRow);
+    $("#addFilter").click(addFilterRow);
+
+    $("#previewBtn").click(function(){
+        alert("Previewing 10 records with query:\n" + $("#generatedQuery").val());
+    });
+    $("#saveBtn").click(function(){
+        alert("Query saved temporarily!");
+    });
+    $("#submitBtn").click(function(){
+        alert("Query submitted:\n" + $("#generatedQuery").val());
+    });
+
+    // Add initial row
+    addTableColumnRow();
+    addFilterRow();
+});
+</script>
+</body>
+</html>

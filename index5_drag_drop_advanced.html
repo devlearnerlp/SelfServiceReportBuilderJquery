@@ -1,0 +1,873 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Self-Service Query Builder — Enhanced</title>
+
+  <!-- Bootstrap -->
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/5.3.2/css/bootstrap.min.css" rel="stylesheet"/>
+  <!-- jQuery UI -->
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/jqueryui/1.13.2/themes/smoothness/jquery-ui.min.css" rel="stylesheet"/>
+  <!-- Select2 -->
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/css/select2.min.css" rel="stylesheet"/>
+  <!-- CodeMirror (SQL mode) -->
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.css" rel="stylesheet"/>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/theme/dracula.min.css" rel="stylesheet"/>
+
+  <style>
+    :root{
+      --bg:#f6f8fb; --card:#fff; --muted:#6c757d;
+    }
+    .dark {
+      --bg:#0f1720; --card:#0b1220; --muted:#9aa7b2;
+      color: #e6eef6;
+    }
+    body { background:var(--bg); font-family:Inter, Arial, sans-serif; padding:18px; color:inherit; }
+    .card-panel { background:var(--card); border-radius:8px; padding:12px; box-shadow:0 2px 8px rgba(2,6,23,0.06); margin-bottom:12px; color:inherit; }
+    h3 { margin-bottom:6px; }
+    .pick-list { min-height:120px; border:1px dashed #cfd8e3; padding:8px; background:transparent; border-radius:6px; overflow:auto;}
+    .pick-item { padding:6px 8px; margin:6px 0; background:rgba(255,255,255,0.03); border-radius:6px; border:1px solid rgba(0,0,0,0.05); cursor:grab; display:flex; justify-content:space-between; align-items:center; }
+    .pick-item .meta { font-size:0.82rem; color:var(--muted); margin-left:8px; }
+    .drop-target { min-height:80px; border:2px dashed transparent; transition:border-color .12s, background .12s; padding:6px; }
+    .drop-target.ui-state-highlight { border-color:#66b2ff; background: rgba(102,178,255,0.05); }
+    .table-block { padding:8px; border-radius:6px; border:1px solid rgba(0,0,0,0.06); margin-bottom:8px; background:rgba(255,255,255,0.02); display:flex; justify-content:space-between; align-items:center; gap:8px; }
+    .badge-type { font-size:0.78rem; }
+    .filter-row { display:flex; gap:6px; align-items:center; margin-bottom:8px; }
+    textarea, .CodeMirror { font-family: monospace; }
+    .trash { text-align:center; padding:8px; border-radius:6px; background:transparent; border:1px dashed #ccc; color:#c0392b; }
+    .small-muted { font-size:0.85rem; color:var(--muted); }
+    .join-panel { border-top:1px dashed rgba(0,0,0,0.06); padding-top:8px; margin-top:8px; }
+    .collapse .card-panel { padding:8px; }
+    .top-controls { display:flex; gap:8px; align-items:center; justify-content:space-between; }
+  </style>
+</head>
+<body>
+  <div id="app" class="">
+    <div class="card-panel">
+      <div class="top-controls">
+        <div>
+          <h3 class="mb-0">Self-Service Query Builder — Enhanced</h3>
+          <div class="small-muted">Both MC Customer & MC Developer — Create / Edit, drag/drop, visual joins, smart filters, export/import, theme toggle.</div>
+        </div>
+
+        <div class="d-flex gap-2 align-items-center">
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" id="themeSwitch">
+            <label class="form-check-label small-muted" for="themeSwitch">Dark</label>
+          </div>
+          <button id="exportBtn" class="btn btn-sm btn-outline-secondary">Export JSON</button>
+          <input id="importFile" type="file" accept=".json" style="display:none" />
+          <button id="importBtn" class="btn btn-sm btn-outline-secondary">Import JSON</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Role & Action -->
+    <div class="card-panel row gx-3 gy-2 align-items-center">
+      <div class="col-md-3">
+        <label class="form-label small-muted">Role</label>
+        <select id="roleSelect" class="form-select">
+          <option value="">-- Select Role --</option>
+          <option value="MC Customer">MC Customer</option>
+          <option value="MC Developer">MC Developer</option>
+        </select>
+      </div>
+
+      <div class="col-md-3">
+        <label class="form-label small-muted">Action</label>
+        <select id="actionSelect" class="form-select" disabled>
+          <option value="">-- Select --</option>
+          <option value="create">Create New Report</option>
+          <option value="edit">Edit Existing Report</option>
+        </select>
+      </div>
+
+      <div class="col-md-4" id="reportsCol" style="display:none">
+        <label class="form-label small-muted">Existing Reports</label>
+        <select id="reportSelect" class="form-select"></select>
+      </div>
+
+      <div class="col-md-2">
+        <label class="form-label small-muted">Query Type</label>
+        <select id="queryType" class="form-select">
+          <option>Oracle</option>
+          <option>Databricks</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Panels -->
+    <div class="row g-3">
+      <!-- Palette -->
+      <div class="col-md-4">
+        <div class="card-panel">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <strong>Palette</strong>
+            <div class="small-muted">Drag items to the builder</div>
+          </div>
+
+          <div>
+            <div class="small-muted mb-1">Tables</div>
+            <div id="tablesPalette" class="pick-list"></div>
+          </div>
+
+          <hr/>
+
+          <div>
+            <div class="small-muted mb-1">Columns</div>
+            <div id="columnsPalette" class="pick-list small-muted">Select a table or drop a table into Selected Tables to populate columns here.</div>
+          </div>
+
+          <hr/>
+
+          <div>
+            <div class="small-muted mb-1">Quick Filters</div>
+            <div id="quickFilters" class="pick-list"></div>
+          </div>
+
+          <div class="text-center mt-3">
+            <div id="trash" class="trash">Drag here to delete</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Builder -->
+      <div class="col-md-8">
+        <div class="card-panel">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <strong>Builder</strong>
+            <div><small class="small-muted">Live query updates</small></div>
+          </div>
+
+          <div class="mb-2">
+            <button class="btn btn-sm btn-outline-primary me-2" data-bs-toggle="collapse" data-bs-target="#panelTables">Tables & Columns</button>
+            <button class="btn btn-sm btn-outline-primary me-2" data-bs-toggle="collapse" data-bs-target="#panelFilters">Filters</button>
+            <button class="btn btn-sm btn-outline-primary me-2" data-bs-toggle="collapse" data-bs-target="#panelQuery">Query</button>
+            <button class="btn btn-sm btn-outline-primary" data-bs-toggle="collapse" data-bs-target="#panelPreview">Preview</button>
+          </div>
+
+          <!-- Tables & Columns collapse -->
+          <div id="panelTables" class="collapse show">
+            <div class="row g-2">
+              <div class="col-md-6">
+                <label class="form-label small-muted">Selected Tables (drop table items here)</label>
+                <div id="selectedTables" class="drop-target pick-list"></div>
+              </div>
+
+              <div class="col-md-6">
+                <label class="form-label small-muted">Selected Columns (drop columns here)</label>
+                <div id="selectedColumns" class="drop-target pick-list"></div>
+              </div>
+            </div>
+
+            <div class="join-panel mt-2">
+              <strong class="small-muted">Join Builder</strong>
+              <div id="joinBuilder" class="small-muted mt-2">When multiple tables are selected you'll see join rows here — choose join type and columns to form joins.</div>
+            </div>
+          </div>
+
+          <!-- Filters collapse -->
+          <div id="panelFilters" class="collapse show mt-3">
+            <div class="d-flex justify-content-between align-items-center">
+              <div><strong class="small-muted">Filters</strong></div>
+              <div><button id="addFilterBtn" class="btn btn-sm btn-outline-secondary">+ Add Filter</button></div>
+            </div>
+            <div id="filtersArea" class="drop-target mt-2" style="min-height:70px;padding:8px;border-radius:6px;"></div>
+          </div>
+
+          <!-- Query collapse -->
+          <div id="panelQuery" class="collapse show mt-3">
+            <div class="mb-2">
+              <label class="form-label small-muted">Generated Query</label>
+              <textarea id="generatedQuery" rows="7" class="form-control"></textarea>
+            </div>
+
+            <div class="d-flex gap-2">
+              <button id="previewBtn" class="btn btn-primary">Preview</button>
+              <button id="saveBtn" class="btn btn-warning">Save (temp)</button>
+              <button id="submitBtn" class="btn btn-success">Submit (save report)</button>
+              <div class="ms-auto">
+                <button id="toggleRaw" class="btn btn-outline-secondary btn-sm">Toggle Raw Editor</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Preview collapse -->
+          <div id="panelPreview" class="collapse mt-3">
+            <div id="previewPanel" style="display:none;">
+              <div id="previewNotice" class="small-muted mb-2"></div>
+              <div class="table-responsive"><table id="previewTable" class="table table-sm table-bordered"></table></div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Raw editor -->
+        <div id="rawEditor" class="card-panel mt-3" style="display:none;">
+          <label class="form-label small-muted">Developer Raw Editor (CodeMirror)</label>
+          <textarea id="rawQuery" rows="6" class="form-control"></textarea>
+          <div class="mt-2">
+            <button id="rawPreviewBtn" class="btn btn-primary btn-sm">Preview Raw</button>
+            <button id="applyRawBtn" class="btn btn-secondary btn-sm">Apply to Builder</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- libs -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jqueryui/1.13.2/jquery-ui.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/5.3.2/js/bootstrap.bundle.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/js/select2.full.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/sql/sql.min.js"></script>
+
+  <script>
+  /*************************************************************************
+   * Enhanced Self-Service Query Builder — Single-file
+   *
+   * Features implemented:
+   * - Role / Action Create/Edit for Developer & Customer
+   * - Drag & drop palette for tables, columns, quick filters
+   * - Selected Tables / Selected Columns areas (draggable items)
+   * - Join builder UI for multi-table joins with selection of join columns
+   * - Smart filters based on column data type; datepicker for date values
+   * - Live generated SQL
+   * - Preview (tries POST /api/preview; falls back to client mock)
+   * - Save (sessionStorage) and Submit (stores in localStorage)
+   * - Export/Import (JSON)
+   * - Raw editor (CodeMirror)
+   * - Theme toggle (dark)
+   *
+   * This file runs offline (no server needed), but tries server preview if available.
+   *************************************************************************/
+
+  // -------------------------
+  // Metadata
+  // -------------------------
+  const METADATA = {
+    tables: {
+      customers: { cols: ["id","name","email","city","created_at"], types: { id:'int', name:'string', email:'string', city:'string', created_at:'date' } },
+      orders: { cols: ["id","customer_id","product_id","order_date","quantity","amount","status"], types: { id:'int', customer_id:'int', product_id:'int', order_date:'date', quantity:'int', amount:'number', status:'string' } },
+      products: { cols: ["id","name","price","stock","category"], types: { id:'int', name:'string', price:'number', stock:'int', category:'string' } }
+    },
+    relationships: [
+      { leftTable:"customers", leftCol:"id", rightTable:"orders", rightCol:"customer_id" },
+      { leftTable:"products", leftCol:"id", rightTable:"orders", rightCol:"product_id" }
+    ],
+    sampleReports: {
+      salesReport: `SELECT products.id AS product_id, products.name AS product_name, SUM(orders.quantity) AS total_qty
+FROM products
+JOIN orders ON products.id = orders.product_id
+GROUP BY products.id, products.name;`,
+
+      customerOrders: `SELECT customers.id AS customer_id, customers.name, orders.id AS order_id, orders.order_date, orders.status
+FROM customers
+JOIN orders ON customers.id = orders.customer_id
+ORDER BY orders.order_date DESC;`,
+
+      inventoryStatus: `SELECT id AS product_id, name AS product_name, stock
+FROM products
+WHERE stock < 50;`
+    }
+  };
+
+  // CodeMirror instance
+  let cm = null;
+
+  // -------------------------
+  // Init
+  // -------------------------
+  $(function(){
+    // populate palettes
+    initPalette();
+    initQuickFilters();
+    initDragDrop();
+    bindUI();
+    loadReportsToDropdown();
+    initCodeMirror();
+  });
+
+  function initCodeMirror(){
+    cm = CodeMirror.fromTextArea(document.getElementById('rawQuery'), {
+      mode: 'text/x-sql',
+      lineNumbers: true,
+      theme: 'default',
+      viewportMargin: Infinity
+    });
+    // small theme toggle for CodeMirror
+    $('#themeSwitch').on('change', function(){ if(this.checked) cm.setOption('theme','dracula'); else cm.setOption('theme','default'); });
+  }
+
+  // -------------------------
+  // Palette
+  // -------------------------
+  function initPalette(){
+    const tpal = $('#tablesPalette').empty();
+    for (const t of Object.keys(METADATA.tables)) {
+      const item = $(`<div class="pick-item" data-type="table" data-table="${t}"><div>${t}</div><div class="meta">table</div></div>`);
+      tpal.append(item);
+    }
+    $('#columnsPalette').empty().append('<div class="small-muted">Select a table to list columns here (or drop a table into Selected Tables)</div>');
+  }
+
+  function initQuickFilters(){
+    const q = $('#quickFilters').empty();
+    q.append(`<div class="pick-item" data-type="quickfilter" data-filter="orders.status = 'COMPLETE'"><div>orders.status = COMPLETE</div><div class="meta">quick</div></div>`);
+    q.append(`<div class="pick-item" data-type="quickfilter" data-filter="products.stock < 10"><div>products.stock &lt; 10</div><div class="meta">quick</div></div>`);
+    q.append(`<div class="pick-item" data-type="quickfilter" data-filter="customers.city = 'Bengaluru'"><div>customers.city = Bengaluru</div><div class="meta">quick</div></div>`);
+  }
+
+  // -------------------------
+  // Drag & Drop init
+  // -------------------------
+  function initDragDrop(){
+    // make pick-items draggable
+    $(document).on('mouseenter', '.pick-item', function(){
+      if (!$(this).data('ui-draggable')) {
+        $(this).draggable({ helper:'clone', revert:'invalid', appendTo:'body', zIndex:9999 });
+      }
+    });
+
+    // selectedTables droppable
+    $('#selectedTables').droppable({
+      accept: '.pick-item[data-type="table"]',
+      hoverClass: 'ui-state-highlight',
+      drop: function(e, ui){ const t = ui.draggable.data('table'); addTableToSelected(t); }
+    });
+
+    // selectedColumns droppable: accept columns or table (to add its columns)
+    $('#selectedColumns').droppable({
+      accept: '.pick-item',
+      hoverClass: 'ui-state-highlight',
+      drop: function(e, ui){
+        const type = ui.draggable.data('type');
+        if (type === 'table') {
+          const table = ui.draggable.data('table');
+          METADATA.tables[table].cols.forEach(c => addColumnToSelected(`${table}.${c}`));
+        } else if (type === 'column') {
+          addColumnToSelected(ui.draggable.data('col'));
+        }
+      }
+    });
+
+    // filtersArea accepts column or quickfilter or table
+    $('#filtersArea').droppable({
+      accept: '.pick-item',
+      hoverClass: 'ui-state-highlight',
+      drop: function(e, ui){
+        const type = ui.draggable.data('type');
+        if (type === 'column') {
+          const col = ui.draggable.data('col');
+          const parts = col.split('.');
+          addFilterRow({table:parts[0], column:parts[1], op:'=', value:''});
+        } else if (type === 'table') {
+          const table = ui.draggable.data('table');
+          addFilterRow({table:table, column: METADATA.tables[table].cols[0], op:'=', value:''});
+        } else if (type === 'quickfilter') {
+          addFilterFromText(ui.draggable.data('filter'));
+        }
+        buildGeneratedQuery();
+      }
+    });
+
+    // trash droppable removes selected items
+    $('#trash').droppable({
+      accept: '.selected-table, .selected-column, .filter-row',
+      hoverClass: 'ui-state-highlight',
+      drop: function(e, ui){
+        const el = ui.draggable;
+        if (el.hasClass('selected-table')) {
+          removeTableFromSelected(el.data('table'));
+        } else if (el.hasClass('selected-column')) {
+          removeColumnFromSelected(el.data('col'));
+        } else if (el.hasClass('filter-row')) {
+          el.remove();
+        }
+        buildGeneratedQuery();
+      }
+    });
+
+    // clicking pick-item quick-add
+    $(document).on('click', '.pick-item[data-type="table"]', function(){ addTableToSelected($(this).data('table')); });
+    $(document).on('click', '.pick-item[data-type="column"]', function(){ addColumnToSelected($(this).data('col')); });
+    $(document).on('click', '.pick-item[data-type="quickfilter"]', function(){ addFilterFromText($(this).data('filter')); });
+
+  }
+
+  // -------------------------
+  // Builder helpers: tables/columns
+  // -------------------------
+  function addTableToSelected(table) {
+    if ($('#selectedTables .selected-table[data-table="'+table+'"]').length) return;
+    const el = $(`<div class="selected-table table-block" data-table="${table}"><div><strong>${table}</strong></div><div><button class="btn btn-sm btn-outline-danger btn-remove-table">Remove</button></div></div>`);
+    el.find('.btn-remove-table').on('click', function(){ removeTableFromSelected(table); buildGeneratedQuery(); });
+    $('#selectedTables').append(el);
+    el.draggable({ helper:'clone', revert:'invalid', appendTo:'body' });
+    // add columns to columns palette
+    refreshColumnsPalette();
+    buildJoinBuilder();
+    buildGeneratedQuery();
+  }
+
+  function removeTableFromSelected(table) {
+    $('#selectedTables .selected-table[data-table="'+table+'"]').remove();
+    // remove columns belonging to this table
+    $('#selectedColumns .selected-column').each(function(){ if ($(this).data('col').startsWith(table + '.')) $(this).remove(); });
+    refreshColumnsPalette();
+    buildJoinBuilder();
+  }
+
+  function refreshColumnsPalette() {
+    const sel = getSelectedTables();
+    const pal = $('#columnsPalette').empty();
+    if (sel.length === 0) {
+      pal.append('<div class="small-muted">Select one or more tables (drag from left) to see columns here.</div>');
+      return;
+    }
+    for (const t of sel) {
+      pal.append(`<div class="small-muted mt-2"><strong>${t}</strong></div>`);
+      for (const c of METADATA.tables[t].cols) {
+        const item = $(`<div class="pick-item" data-type="column" data-col="${t}.${c}"><div>${t}.${c}</div><div class="meta">col</div></div>`);
+        pal.append(item);
+      }
+    }
+    // make these draggable
+    pal.find('.pick-item').draggable({ helper:'clone', revert:'invalid', appendTo:'body' });
+  }
+
+  function addColumnToSelected(col) {
+    if ($('#selectedColumns .selected-column[data-col="'+col+'"]').length) return;
+    const el = $(`<div class="selected-column pick-item" data-col="${col}">${col} <button class="btn btn-sm btn-outline-danger btn-remove-col ms-2">Remove</button></div>`);
+    el.find('.btn-remove-col').on('click', function(){ removeColumnFromSelected(col); buildGeneratedQuery(); });
+    $('#selectedColumns').append(el);
+    el.draggable({ helper:'clone', revert:'invalid', appendTo:'body' });
+    buildGeneratedQuery();
+  }
+
+  function removeColumnFromSelected(col) {
+    $('#selectedColumns .selected-column[data-col="'+col+'"]').remove();
+  }
+
+  function getSelectedTables() {
+    return $('#selectedTables .selected-table').map(function(){ return $(this).data('table'); }).get();
+  }
+  function getSelectedColumns() {
+    return $('#selectedColumns .selected-column').map(function(){ return $(this).data('col'); }).get();
+  }
+
+  // -------------------------
+  // Join Builder (visual-ish)
+  // -------------------------
+  function buildJoinBuilder() {
+    const sel = getSelectedTables();
+    const jb = $('#joinBuilder').empty();
+    if (sel.length < 2) { jb.text('Add 2+ tables to configure joins.'); return; }
+
+    // build pairwise join rows for adjacent tables (simple)
+    for (let i=1;i<sel.length;i++){
+      const left = sel[i-1], right = sel[i];
+      const rel = findRelationship(left, right) || findRelationship(right, left);
+      const row = $(`<div class="d-flex align-items-center gap-2 mb-1">
+        <div class="small-muted">${left}</div>
+        <div> <select class="form-select join-left-col" style="width:150px"></select> </div>
+        <div>
+          <select class="form-select join-type" style="width:120px">
+            <option value="INNER JOIN">INNER JOIN</option>
+            <option value="LEFT JOIN">LEFT JOIN</option>
+            <option value="RIGHT JOIN">RIGHT JOIN</option>
+          </select>
+        </div>
+        <div> <select class="form-select join-right-col" style="width:150px"></select></div>
+        <div class="small-muted">${right}</div>
+      </div>`);
+      // fill left/right cols
+      const leftCols = METADATA.tables[left].cols; const rightCols = METADATA.tables[right].cols;
+      const lsel = row.find('.join-left-col'); const rsel = row.find('.join-right-col');
+      lsel.append(mkOpt('','--col--')); rsel.append(mkOpt('','--col--'));
+      // prefer relationship if exists
+      if (rel) {
+        lsel.append(mkOpt(rel.leftCol, rel.leftCol)); rsel.append(mkOpt(rel.rightCol, rel.rightCol));
+      }
+      leftCols.forEach(c => { if (c !== rel?.leftCol) lsel.append(mkOpt(c,c)); });
+      rightCols.forEach(c => { if (c !== rel?.rightCol) rsel.append(mkOpt(c,c)); });
+
+      // add to builder
+      jb.append(row);
+      // keep sync: when join options change rebuild query
+      row.find('select').on('change', buildGeneratedQuery);
+    }
+  }
+
+  function findRelationship(a,b){
+    return METADATA.relationships.find(r => (r.leftTable===a && r.rightTable===b) || (r.leftTable===b && r.rightTable===a));
+  }
+
+  // -------------------------
+  // Filters
+  // -------------------------
+  function addFilterRow(prefill){
+    // prefill: {table, column, op, value}
+    const wrapper = $('<div class="filter-row"></div>');
+    const tableSel = $('<select class="form-select filter-table" style="width:22%"></select>');
+    tableSel.append(mkOpt('','--table--'));
+    const chosenTables = getSelectedTables(); const tableChoices = chosenTables.length ? chosenTables : Object.keys(METADATA.tables);
+    tableChoices.forEach(t => tableSel.append(mkOpt(t,t)));
+
+    const colSel = $('<select class="form-select filter-col" style="width:28%"></select>');
+    colSel.append(mkOpt('','--column--'));
+
+    const opSel = $('<select class="form-select filter-op" style="width:18%"><option>=</option><option>!=</option><option>&gt;</option><option>&lt;</option><option>&gt;=</option><option>&lt;=</option><option>LIKE</option></select>');
+
+    const valInp = $(`<input class="form-control filter-val" style="width:28%" placeholder="value">`);
+
+    const rem = $('<button class="btn btn-sm btn-outline-danger">X</button>');
+    rem.on('click', function(){ wrapper.remove(); buildGeneratedQuery(); });
+
+    wrapper.append(tableSel).append(colSel).append(opSel).append(valInp).append(rem);
+    $('#filtersArea').append(wrapper);
+    wrapper.addClass('filter-row');
+
+    // When tableSel changes, populate column options & adjust operators by type
+    tableSel.on('change', function(){
+      const t = $(this).val();
+      colSel.empty().append(mkOpt('','--column--'));
+      if (t && METADATA.tables[t]) {
+        METADATA.tables[t].cols.forEach(c => colSel.append(mkOpt(c,c)));
+      }
+      buildGeneratedQuery();
+    });
+
+    // when column changes, adjust operator list for type
+    colSel.on('change', function(){
+      const t = tableSel.val(), c = colSel.val();
+      if (t && c) {
+        const typ = METADATA.tables[t].types[c] || 'string';
+        opSel.empty();
+        if (typ === 'string') opSel.append('<option>=</option><option>!=</option><option>LIKE</option><option>IN</option>');
+        else if (typ === 'date') opSel.append('<option>=</option><option>&gt;</option><option>&lt;</option><option>BETWEEN</option>');
+        else opSel.append('<option>=</option><option>!=</option><option>&gt;</option><option>&lt;</option><option>&gt;=</option><option>&lt;=</option>');
+      }
+      buildGeneratedQuery();
+    });
+
+    // datepicker for date values (attach on focus if column type is date)
+    $(document).on('focus', '.filter-val', function(){
+      const row = $(this).closest('.filter-row'); const t = row.find('.filter-table').val(); const c = row.find('.filter-col').val();
+      if (t && c && METADATA.tables[t].types[c] === 'date') {
+        if (!$(this).data('hasDate')) {
+          $(this).datepicker({ dateFormat: 'yy-mm-dd' });
+          $(this).data('hasDate', true);
+        }
+      }
+    });
+
+    // changes triggers rebuild
+    wrapper.on('change keyup', '.filter-col, .filter-op, .filter-val', buildGeneratedQuery);
+
+    // prefill if present
+    if (prefill) {
+      if (prefill.table) tableSel.val(prefill.table).trigger('change');
+      setTimeout(()=> { if (prefill.column) colSel.val(prefill.column).trigger('change'); }, 50);
+      if (prefill.op) opSel.val(prefill.op);
+      if (prefill.value) valInp.val(prefill.value);
+    }
+
+    wrapper.draggable({ helper:'clone', revert:'invalid', appendTo:'body' });
+  }
+
+  function addFilterFromText(text) {
+    const m = text.match(/([a-z0-9_]+)\.([a-z0-9_]+)\s*(=|!=|>|<|>=|<=|like)\s*'?([^']*)'?/i);
+    if (m) addFilterRow({table:m[1], column:m[2], op:m[3].toUpperCase(), value:m[4]});
+    else addFilterRow({table:'', column:'', op:'=', value:text});
+  }
+
+  // -------------------------
+  // Query build logic
+  // -------------------------
+  function buildGeneratedQuery(){
+    const qType = $('#queryType').val();
+    const tables = getSelectedTables();
+    const columns = getSelectedColumns();
+
+    const selectClause = columns.length ? columns.join(', ') : (tables.length ? tables.map(t => `${t}.*`).join(', ') : '*');
+
+    // build FROM + JOINs using joinBuilder rows if present; else heuristic
+    let fromClause = '';
+    if (!tables.length) {
+      fromClause = '';
+    } else {
+      fromClause = `${tables[0]}`;
+      // take join settings from joinBuilder rows
+      const joins = [];
+      $('#joinBuilder').children().each(function(){
+        const leftCol = $(this).find('.join-left-col').val();
+        const rightCol = $(this).find('.join-right-col').val();
+        const type = $(this).find('.join-type').val();
+        const leftTable = $(this).find('.join-left-col').length ? $(this).find('.join-left-col').closest('div').prev().text() : null;
+        // simpler: get the visible labels
+      });
+      // fallback heuristic: connect using relationships
+      const included = new Set(); included.add(tables[0]);
+      const joinsHeuristic = [];
+      for (let i=1;i<tables.length;i++){
+        const t = tables[i];
+        const rel = METADATA.relationships.find(r => (r.leftTable===t && included.has(r.rightTable)) || (r.rightTable===t && included.has(r.leftTable)));
+        if (rel) {
+          if (included.has(rel.leftTable)) {
+            joinsHeuristic.push(`JOIN ${rel.rightTable} ON ${rel.leftTable}.${rel.leftCol} = ${rel.rightTable}.${rel.rightCol}`);
+            included.add(rel.rightTable);
+          } else {
+            joinsHeuristic.push(`JOIN ${rel.leftTable} ON ${rel.rightTable}.${rel.rightCol} = ${rel.leftTable}.${rel.leftCol}`);
+            included.add(rel.leftTable);
+          }
+        } else {
+          joinsHeuristic.push(`LEFT JOIN ${t} ON 1=1 -- add join condition`);
+          included.add(t);
+        }
+      }
+      if (joinsHeuristic.length) fromClause += '\n' + joinsHeuristic.join('\n');
+    }
+
+    // filters
+    const filters = [];
+    $('#filtersArea .filter-row').each(function(){
+      const t = $(this).find('.filter-table').val();
+      const c = $(this).find('.filter-col').val();
+      const op = $(this).find('.filter-op').val();
+      const v = $(this).find('.filter-val').val();
+      if (t && c && op && v !== undefined && v !== '') {
+        if (op.toUpperCase() === 'LIKE') filters.push(`${t}.${c} ${op} '%${v}%'`);
+        else filters.push(`${t}.${c} ${op} '${v}'`);
+      }
+    });
+
+    let sql = '';
+    if (!fromClause) sql = `SELECT ${selectClause};`;
+    else sql = `SELECT ${selectClause}\nFROM ${fromClause}${filters.length ? '\nWHERE ' + filters.join(' AND ') : ''};`;
+
+    $('#generatedQuery').val(sql);
+    return sql;
+  }
+
+  // -------------------------
+  // Preview & Mock
+  // -------------------------
+  function previewQuery(){
+    const q = $('#generatedQuery').val();
+    if (!q || !q.trim()) { alert('Please generate a query first'); return; }
+    $('#previewPanel').show(); $('#previewNotice').text('Calling server preview (POST /api/preview) ...');
+    $.ajax({
+      url: '/api/preview',
+      method: 'POST',
+      data: JSON.stringify({ query:q, target: $('#queryType').val() }),
+      contentType: 'application/json',
+      timeout: 4000
+    }).done(function(data){
+      $('#previewNotice').text('Server preview returned:');
+      renderPreviewTable(data);
+    }).fail(function(){
+      $('#previewNotice').text('Server preview failed — showing mock preview:');
+      const mock = mockPreviewFromQuery(q);
+      renderPreviewTable(mock);
+    });
+  }
+
+  function mockPreviewFromQuery(sql){
+    const match = sql.match(/select\s+([\s\S]*?)\s+from/i);
+    let cols = match ? match[1].split(',').map(s=>s.trim()).slice(0,8) : ['col1','col2','col3'];
+    cols = cols.map(c => c.split(/\s+as\s+/i)[0].trim());
+    const rows = [];
+    for (let i=1;i<=6;i++){
+      const r = {}; cols.forEach(c => { const nm = c.includes('.') ? c.split('.')[1] : c.replace(/[^a-z0-9_]/ig,''); r[c] = sampleValueForColumn(nm,i); });
+      rows.push(r);
+    }
+    return { columns: cols, rows: rows };
+  }
+  function sampleValueForColumn(name,i){
+    const n = name.toLowerCase();
+    if (n.includes('id')) return i;
+    if (n.includes('name')) return 'Name '+i;
+    if (n.includes('email')) return `user${i}@example.com`;
+    if (n.includes('date')) return `2024-0${(i%9)+1}-01`;
+    if (n.includes('price')||n.includes('amount')) return (i*11.5).toFixed(2);
+    return 'val'+i;
+  }
+  function renderPreviewTable(data){
+    const cols = data.columns || (data.rows && Object.keys(data.rows[0]) || []);
+    const table = $('#previewTable').empty();
+    const thead = $('<thead>').appendTo(table); const trh = $('<tr>').appendTo(thead);
+    cols.forEach(c => $('<th>').text(c).appendTo(trh));
+    const tbody = $('<tbody>').appendTo(table);
+    (data.rows || []).forEach(r => {
+      const tr = $('<tr>').appendTo(tbody);
+      cols.forEach(c => $('<td>').text(r[c] === undefined ? '' : r[c]).appendTo(tr));
+    });
+  }
+
+  // -------------------------
+  // Save / Submit / Export / Import
+  // -------------------------
+  function saveTempDraft(){
+    const draft = { query: $('#generatedQuery').val(), target: $('#queryType').val(), savedAt: Date.now() };
+    sessionStorage.setItem('ssqb_temp_draft', JSON.stringify(draft));
+    alert('Saved to sessionStorage (temp).');
+  }
+
+  function submitReport(){
+    const sql = $('#generatedQuery').val();
+    if (!sql || !sql.trim()) { alert('Generate a query first'); return; }
+    if (!validateBeforeSubmit()) return;
+    const name = prompt('Enter a unique key for the report (e.g., monthlySalesReport):');
+    if (!name) return;
+    const key = sanitizeKey(name);
+    const stored = JSON.parse(localStorage.getItem('ssqb_saved_reports') || '{}');
+    stored[key] = sql;
+    localStorage.setItem('ssqb_saved_reports', JSON.stringify(stored));
+    alert('Report submitted and saved locally.');
+    loadReportsToDropdown();
+  }
+
+  function validateBeforeSubmit(){
+    const tables = getSelectedTables();
+    if (!tables.length) { alert('Validation: Please select at least one table before submitting.'); return false; }
+    // additional validation can be added
+    return true;
+  }
+
+  function exportJSON(){
+    const state = {
+      tables: getSelectedTables(),
+      columns: getSelectedColumns(),
+      filters: $('#filtersArea .filter-row').map(function(){
+        return {
+          table: $(this).find('.filter-table').val(),
+          column: $(this).find('.filter-col').val(),
+          op: $(this).find('.filter-op').val(),
+          value: $(this).find('.filter-val').val()
+        };
+      }).get(),
+      query: $('#generatedQuery').val(),
+      target: $('#queryType').val()
+    };
+    const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'ssqb_export.json'; a.click();
+    URL.revokeObjectURL(url);
+  }
+  function importJSONFile(file){
+    const reader = new FileReader();
+    reader.onload = function(e){
+      try {
+        const obj = JSON.parse(e.target.result);
+        applyImportedState(obj);
+      } catch (err) { alert('Invalid JSON'); }
+    };
+    reader.readAsText(file);
+  }
+  function applyImportedState(st){
+    // clear current
+    $('#selectedTables').empty(); $('#selectedColumns').empty(); $('#filtersArea').empty();
+    (st.tables || []).forEach(t => addTableToSelected(t));
+    (st.columns || []).forEach(c => addColumnToSelected(c));
+    (st.filters || []).forEach(f => addFilterRow(f));
+    if (st.query) $('#generatedQuery').val(st.query);
+    if (st.target) $('#queryType').val(st.target);
+    buildJoinBuilder(); buildGeneratedQuery();
+  }
+
+  // -------------------------
+  // Parse SQL -> builder best-effort
+  // -------------------------
+  function parseQueryToBuilder(sql){
+    $('#selectedTables').empty(); $('#selectedColumns').empty(); $('#filtersArea').empty();
+    try {
+      const fromMatch = sql.match(/\bfrom\s+([a-z0-9_\."]+)/i);
+      const fromTbl = fromMatch ? cleanFromToken(fromMatch[1]) : null;
+      const joinMatches = [...sql.matchAll(/\bjoin\s+([a-z0-9_\."]+)/ig)].map(m => cleanFromToken(m[1]));
+      const tbls = []; if (fromTbl) tbls.push(fromTbl); joinMatches.forEach(j=>{ if (!tbls.includes(j)) tbls.push(j); });
+
+      const known = Object.keys(METADATA.tables);
+      const selected = tbls.filter(t => known.includes(t));
+      selected.forEach(t => addTableToSelected(t));
+      const selColsMatch = sql.match(/\bselect\s+([\s\S]*?)\s+from\s+/i);
+      if (selColsMatch) {
+        const cols = selColsMatch[1].split(',').map(s=>s.trim());
+        cols.forEach(c => {
+          const main = c.split(/\s+as\s+/i)[0].trim();
+          if (main.includes('.')) addColumnToSelected(main);
+          else {
+            for (const t of selected) {
+              if (METADATA.tables[t].cols.includes(main.replace(/["'`]/g,''))) { addColumnToSelected(`${t}.${main}`); break; }
+            }
+          }
+        });
+      }
+      // parse where -> filters
+      const whereMatch = sql.match(/\bwhere\s+([\s\S]*?)(?:group\s+by|order\s+by|;|$)/i);
+      if (whereMatch) {
+        const parts = whereMatch[1].split(/\s+and\s+/i);
+        parts.forEach(p => {
+          const m = p.match(/([a-z0-9_]+)\.([a-z0-9_]+)\s*(=|!=|>|<|>=|<=|like)\s*('?)([^']*?)\4/i);
+          if (m) addFilterRow({table:m[1], column:m[2], op:m[3].toUpperCase(), value:m[5]});
+        });
+      }
+      refreshColumnsPalette();
+      buildJoinBuilder();
+      buildGeneratedQuery();
+    } catch (err) { console.warn('parseQuery error', err); }
+  }
+
+  function cleanFromToken(tok) { return tok.replace(/["'`]/g,'').split(/\s+/)[0].split('.')[0]; }
+
+  // -------------------------
+  // Utilities & bindings
+  // -------------------------
+  function mkOpt(v,t){ return $(`<option value="${v}">${t}</option>`); }
+  function sanitizeKey(s){ return s.replace(/\s+/g,'_').replace(/[^a-zA-Z0-9_]/g,''); }
+
+  function loadReportsToDropdown(){
+    const sel = $('#reportSelect').empty();
+    sel.append(mkOpt('','-- choose report --'));
+    for (const k of Object.keys(METADATA.sampleReports)) sel.append(mkOpt(k, k + ' (sample)'));
+    const saved = JSON.parse(localStorage.getItem('ssqb_saved_reports') || '{}');
+    for (const k of Object.keys(saved)) sel.append(mkOpt(k, k + ' (saved)'));
+  }
+
+  function bindUI(){
+    $('#roleSelect').on('change', function(){ $('#actionSelect').prop('disabled', !this.value); $('#actionSelect').val(''); $('#reportsCol').hide(); $('#generatedQuery').val(''); $('#previewPanel').hide(); $('#rawEditor').hide(); $('#selectedTables').empty(); $('#selectedColumns').empty(); $('#filtersArea').empty(); loadReportsToDropdown(); });
+    $('#actionSelect').on('change', function(){ const a = $(this).val(); $('#previewPanel').hide(); $('#generatedQuery').val(''); $('#selectedTables').empty(); $('#selectedColumns').empty(); $('#filtersArea').empty(); if (a==='edit') { $('#reportsCol').show(); $('#generatedQuery').val(''); } else { $('#reportsCol').hide(); } });
+    $('#reportSelect').on('change', function(){ const k = $(this).val(); if (!k) return; const saved = JSON.parse(localStorage.getItem('ssqb_saved_reports') || '{}'); const sql = saved[k] || METADATA.sampleReports[k]; $('#generatedQuery').val(sql); parseQueryToBuilder(sql); $('#previewPanel').hide(); });
+    $('#columnsPalette').on('mouseenter', '.pick-item', function(){ if (!$(this).data('ui-draggable')) $(this).draggable({ helper:'clone', revert:'invalid', appendTo:'body' }); });
+    $('#exportBtn').on('click', exportJSON);
+    $('#importBtn').on('click', function(){ $('#importFile').click(); });
+    $('#importFile').on('change', function(){ if (this.files && this.files[0]) importJSONFile(this.files[0]); this.value = ''; });
+
+    $('#addFilterBtn').on('click', function(){ addFilterRow(); });
+    $('#previewBtn').on('click', previewQuery);
+    $('#saveBtn').on('click', saveTempDraft);
+    $('#submitBtn').on('click', submitReport);
+    $('#toggleRaw').on('click', function(){ $('#rawEditor').toggle(); });
+    $('#rawPreviewBtn').on('click', function(){ const sql = cm.getValue(); previewRaw(sql); });
+    $('#applyRawBtn').on('click', function(){ const sql = cm.getValue(); $('#generatedQuery').val(sql); parseQueryToBuilder(sql); $('#rawEditor').hide(); });
+
+    $('#generatedQuery').on('input', function(){ /* allow user to edit generated SQL manually */ });
+    $('#generatedQuery').on('blur', function(){ parseQueryToBuilder($(this).val()); });
+
+    $('#themeSwitch').on('change', function(){ if (this.checked) $('#app').addClass('dark'); else $('#app').removeClass('dark'); });
+  }
+
+  function previewRaw(sql){ if (!sql) { alert('Raw SQL empty'); return; } const prev = $('#generatedQuery').val(); $('#generatedQuery').val(sql); previewQuery(); $('#generatedQuery').val(prev); }
+
+  // ensure live updates when user modifies selected tables/columns/filters
+  // observe DOM changes to key nodes to rebuild SQL
+  const observer = new MutationObserver(function(){ buildGeneratedQuery(); buildJoinBuilder(); });
+  observer.observe(document.getElementById('selectedTables'), { childList:true, subtree:true });
+  observer.observe(document.getElementById('selectedColumns'), { childList:true, subtree:true });
+  observer.observe(document.getElementById('filtersArea'), { childList:true, subtree:true });
+
+  </script>
+</body>
+</html>
