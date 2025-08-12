@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Self Service Query Builder</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/jqueryui/1.13.2/themes/base/jquery-ui.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/select2/4.1.0/css/select2.min.css">
+<style>
+body { font-family: Arial, sans-serif; margin: 20px; }
+.section { border: 1px solid #ccc; padding: 15px; margin-bottom: 15px; border-radius: 6px; background: #f9f9f9; }
+label { font-weight: bold; margin-top: 10px; display: block; }
+textarea { width: 100%; height: 120px; }
+table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+th, td { border: 1px solid #ccc; padding: 5px; text-align: left; }
+th { background-color: #f2f2f2; }
+.btn { padding: 5px 10px; margin: 2px; cursor: pointer; border: none; background: #007bff; color: white; border-radius: 4px; }
+.btn-danger { background: red; }
+</style>
+</head>
+<body>
+
+<h2>Self Service Query Builder</h2>
+
+<div class="section">
+    <label>Role</label>
+    <select id="roleSelect">
+        <option value="">-- Select Role --</option>
+        <option value="customer">MC Customer</option>
+        <option value="developer">MC Developer</option>
+    </select>
+</div>
+
+<div class="section" id="reportOptions" style="display:none;">
+    <label>Choose Action</label>
+    <select id="actionSelect">
+        <option value="">-- Select Action --</option>
+        <option value="new">Create New Report</option>
+        <option value="edit">Edit Existing Report</option>
+    </select>
+</div>
+
+<div class="section" id="existingReports" style="display:none;">
+    <label>Existing Reports</label>
+    <select id="reportList">
+        <option value="">-- Select Report --</option>
+        <option value="r1">Customer Orders Report</option>
+        <option value="r2">Payments Summary</option>
+    </select>
+</div>
+
+<div class="section" id="queryBuilder" style="display:none;">
+    <label>Select Tables</label>
+    <select id="tables" multiple>
+        <option value="Customers">Customers</option>
+        <option value="Orders">Orders</option>
+        <option value="Products">Products</option>
+        <option value="Payments">Payments</option>
+    </select>
+
+    <label>Select Columns</label>
+    <select id="columns" multiple></select>
+
+    <label>Join Conditions</label>
+    <div id="joinsContainer"></div>
+    <button class="btn" id="addJoin">+ Add Join</button>
+
+    <label>Filters</label>
+    <div id="filtersContainer"></div>
+    <button class="btn" id="addFilter">+ Add Filter</button>
+
+    <label>Tech Stack</label>
+    <select id="techStack">
+        <option value="oracle">Oracle</option>
+        <option value="databricks">Databricks</option>
+    </select>
+
+    <label>Generated Query</label>
+    <textarea id="queryOutput" readonly></textarea>
+
+    <button class="btn" id="previewBtn">Preview</button>
+    <button class="btn" id="saveBtn">Save</button>
+    <button class="btn" id="submitBtn">Submit</button>
+
+    <div id="previewResults"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.4/jquery.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jqueryui/1.13.2/jquery-ui.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/select2/4.1.0/js/select2.full.min.js"></script>
+<script>
+const tableColumns = {
+    "Customers": ["CustomerID", "Name", "Email", "Phone"],
+    "Orders": ["OrderID", "CustomerID", "ProductID", "OrderDate", "Amount"],
+    "Products": ["ProductID", "ProductName", "Price"],
+    "Payments": ["PaymentID", "OrderID", "PaymentDate", "Amount"]
+};
+let savedQuery = "";
+
+function refreshColumns() {
+    let selectedTables = $("#tables").val();
+    let colSelect = $("#columns");
+    colSelect.empty();
+    selectedTables.forEach(tbl => {
+        tableColumns[tbl].forEach(col => {
+            colSelect.append(`<option value="${tbl}.${col}">${tbl}.${col}</option>`);
+        });
+    });
+    colSelect.trigger('change');
+    updateQuery();
+}
+
+function addJoinRow(join = {}) {
+    let selectedTables = $("#tables").val();
+    if (selectedTables.length < 2) return alert("Select at least 2 tables for join.");
+    let html = `<div class="joinRow">
+        <select class="joinTable1">
+            ${selectedTables.map(t => `<option value="${t}">${t}</option>`).join('')}
+        </select>
+        <select class="joinCol1"></select>
+        <select class="joinOp"><option>=</option><option>!=</option><option>></option><option><</option></select>
+        <select class="joinTable2">
+            ${selectedTables.map(t => `<option value="${t}">${t}</option>`).join('')}
+        </select>
+        <select class="joinCol2"></select>
+        <button class="btn btn-danger removeJoin">Remove</button>
+    </div>`;
+    $("#joinsContainer").append(html);
+    updateJoinCols();
+}
+
+function updateJoinCols() {
+    $(".joinTable1, .joinTable2").each(function() {
+        let tbl = $(this).val();
+        let colSelect = $(this).siblings("select").first();
+        colSelect.empty();
+        tableColumns[tbl].forEach(c => colSelect.append(`<option>${c}</option>`));
+    });
+    updateQuery();
+}
+
+function addFilterRow() {
+    let selectedTables = $("#tables").val();
+    let html = `<div class="filterRow">
+        <select class="filterCol">
+            ${selectedTables.flatMap(t => tableColumns[t].map(c => `<option value="${t}.${c}">${t}.${c}</option>`)).join('')}
+        </select>
+        <select class="filterOp"><option>=</option><option>!=</option><option>></option><option><</option></select>
+        <input type="text" class="filterVal">
+        <button class="btn btn-danger removeFilter">Remove</button>
+    </div>`;
+    $("#filtersContainer").append(html);
+    updateQuery();
+}
+
+function updateQuery() {
+    let tables = $("#tables").val();
+    let cols = $("#columns").val() || ["*"];
+    let joins = [];
+    $(".joinRow").each(function() {
+        let t1 = $(this).find(".joinTable1").val();
+        let c1 = $(this).find(".joinCol1").val();
+        let op = $(this).find(".joinOp").val();
+        let t2 = $(this).find(".joinTable2").val();
+        let c2 = $(this).find(".joinCol2").val();
+        joins.push(`${t1}.${c1} ${op} ${t2}.${c2}`);
+    });
+    let filters = [];
+    $(".filterRow").each(function() {
+        let col = $(this).find(".filterCol").val();
+        let op = $(this).find(".filterOp").val();
+        let val = $(this).find(".filterVal").val();
+        filters.push(`${col} ${op} '${val}'`);
+    });
+    let query = `SELECT ${cols.join(", ")} FROM ${tables.join(", ")}`;
+    if (joins.length) query += ` WHERE ${joins.join(" AND ")}`;
+    if (filters.length) query += joins.length ? ` AND ${filters.join(" AND ")}` : ` WHERE ${filters.join(" AND ")}`;
+    $("#queryOutput").val(query);
+}
+
+$(document).on("change", "#tables", refreshColumns);
+$(document).on("change", ".joinTable1, .joinTable2", updateJoinCols);
+$(document).on("change", ".joinCol1, .joinCol2, .joinOp, .filterCol, .filterOp, .filterVal, #columns", updateQuery);
+$(document).on("click", "#addJoin", () => addJoinRow());
+$(document).on("click", ".removeJoin", function(){ $(this).parent().remove(); updateQuery(); });
+$(document).on("click", "#addFilter", () => addFilterRow());
+$(document).on("click", ".removeFilter", function(){ $(this).parent().remove(); updateQuery(); });
+
+$("#roleSelect").change(function(){
+    $("#reportOptions").toggle(!!$(this).val());
+});
+$("#actionSelect").change(function(){
+    if ($(this).val() === "edit") $("#existingReports").show();
+    else { $("#existingReports").hide(); $("#queryBuilder").show(); }
+});
+$("#reportList").change(function(){
+    if ($(this).val()) $("#queryBuilder").show();
+});
+$("#previewBtn").click(function(){
+    let mockData = [
+        { CustomerID: 1, Name: "Alice", Amount: 120 },
+        { CustomerID: 2, Name: "Bob", Amount: 90 }
+    ];
+    let html = "<table><tr>" + Object.keys(mockData[0]).map(k=>`<th>${k}</th>`).join('') + "</tr>";
+    mockData.forEach(r => {
+        html += "<tr>" + Object.values(r).map(v=>`<td>${v}</td>`).join('') + "</tr>";
+    });
+    html += "</table>";
+    $("#previewResults").html(html);
+});
+$("#saveBtn").click(function(){ savedQuery = $("#queryOutput").val(); alert("Query saved."); });
+$("#submitBtn").click(function(){ alert("Query submitted:\n" + $("#queryOutput").val()); });
+$("#tables, #columns").select2();
+</script>
+</body>
+</html>
