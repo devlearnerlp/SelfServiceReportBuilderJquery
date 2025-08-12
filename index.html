@@ -1,0 +1,669 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Self-Service Query Builder (jQuery)</title>
+
+  <!-- Bootstrap CSS -->
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/5.3.2/css/bootstrap.min.css" rel="stylesheet"/>
+  <!-- Select2 CSS -->
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/css/select2.min.css" rel="stylesheet"/>
+
+  <style>
+    body { padding:20px; background:#f7f9fb; font-family: Arial, sans-serif }
+    textarea { font-family: monospace; }
+    .small-gap { gap: 8px; }
+    .filter-row { margin-bottom:8px; }
+    .card-panel { background:#fff; padding:16px; border-radius:8px; box-shadow:0 1px 4px rgba(0,0,0,0.06); }
+    .select2-container--bootstrap5 .select2-selection { height: calc(2.25rem + 2px); padding: .375rem .75rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h3>Self-Service Query Builder</h3>
+    <p class="text-muted">Both roles (MC Customer / MC Developer) support Create New & Edit Existing report flows.</p>
+
+    <div class="card-panel mb-3">
+      <div class="row small-gap">
+        <div class="col-md-4">
+          <label class="form-label">Role</label>
+          <select id="roleSelect" class="form-select">
+            <option value="">-- Select Role --</option>
+            <option value="MC Customer">MC Customer</option>
+            <option value="MC Developer">MC Developer</option>
+          </select>
+        </div>
+
+        <div class="col-md-4">
+          <label class="form-label">Action</label>
+          <select id="actionSelect" class="form-select" disabled>
+            <option value="">-- Select Action --</option>
+            <option value="create">Create New Report</option>
+            <option value="edit">Edit Existing Report</option>
+          </select>
+        </div>
+
+        <div class="col-md-4" id="reportsCol" style="display:none">
+          <label class="form-label">Existing Reports</label>
+          <select id="reportSelect" class="form-select">
+            <option value="">-- Choose Report --</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Builder / Editor Panel -->
+    <div class="card-panel mb-3" id="builderPanel" style="display:none">
+      <div class="row">
+        <div class="col-md-12 mb-2">
+          <label class="form-label">Query Type</label>
+          <select id="queryType" class="form-select">
+            <option>Oracle</option>
+            <option>Databricks</option>
+          </select>
+        </div>
+
+        <div class="col-md-6 mb-2">
+          <label class="form-label">Tables (multi-select)</label>
+          <select id="tablesSelect" multiple class="form-select"></select>
+          <div class="form-text">Select one or more tables. Columns and filter options update automatically.</div>
+        </div>
+
+        <div class="col-md-6 mb-2">
+          <label class="form-label">Columns (multi-select)</label>
+          <select id="columnsSelect" multiple class="form-select"></select>
+          <div class="form-text">Pick table.column entries to include in SELECT. If empty, builder will use table.*.</div>
+        </div>
+      </div>
+
+      <hr/>
+
+      <div class="mb-2">
+        <label class="form-label">Filters</label>
+        <div id="filtersArea"></div>
+        <button id="addFilterBtn" class="btn btn-sm btn-outline-secondary mt-2">+ Add Filter</button>
+      </div>
+
+      <div class="mb-2">
+        <label class="form-label">Generated Query</label>
+        <textarea id="generatedQuery" rows="7" class="form-control"></textarea>
+      </div>
+
+      <div class="d-flex gap-2">
+        <button id="previewBtn" class="btn btn-primary">Preview (10 rows)</button>
+        <button id="saveBtn" class="btn btn-warning">Save (temp)</button>
+        <button id="submitBtn" class="btn btn-success">Submit (save as report)</button>
+        <button id="rawEditToggle" class="btn btn-outline-secondary ms-auto">Toggle Raw Edit</button>
+      </div>
+
+      <div id="previewPanel" class="mt-3" style="display:none">
+        <h6>Preview Result</h6>
+        <div id="previewNotice" class="mb-2 text-muted"></div>
+        <div class="table-responsive">
+          <table id="previewTable" class="table table-sm table-bordered"></table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Raw editor (visible when toggled) -->
+    <div class="card-panel mb-3" id="rawEditor" style="display:none">
+      <label class="form-label">Raw Query Editor</label>
+      <textarea id="rawQuery" rows="8" class="form-control"></textarea>
+      <div class="mt-2">
+        <button id="rawPreviewBtn" class="btn btn-primary">Preview Raw Query</button>
+        <button id="rawApplyBtn" class="btn btn-secondary">Apply to Builder</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- jQuery, Select2, Bootstrap JS -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/js/select2.full.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/5.3.2/js/bootstrap.bundle.min.js"></script>
+
+  <script>
+  // --- Metadata & helpers ---
+  const METADATA = {
+    tables: {
+      customers: ["id","name","email","city","created_at"],
+      orders: ["id","customer_id","product_id","order_date","quantity","amount","status"],
+      products: ["id","name","price","stock","category"]
+    },
+    // simple relationships (used to build JOINs)
+    relationships: [
+      { leftTable: "customers", leftCol: "id", rightTable: "orders", rightCol: "customer_id" },
+      { leftTable: "products", leftCol: "id", rightTable: "orders", rightCol: "product_id" }
+    ],
+    // initial sample reports (built-in)
+    sampleReports: {
+      salesReport: `SELECT products.id AS product_id, products.name AS product_name, SUM(orders.quantity) AS total_qty
+FROM products
+JOIN orders ON products.id = orders.product_id
+GROUP BY products.id, products.name;`,
+
+      customerOrders: `SELECT customers.id AS customer_id, customers.name, orders.id AS order_id, orders.order_date, orders.status
+FROM customers
+JOIN orders ON customers.id = orders.customer_id
+ORDER BY orders.order_date DESC;`,
+
+      inventoryStatus: `SELECT id AS product_id, name AS product_name, stock
+FROM products
+WHERE stock < 50;`
+    }
+  };
+
+  // utility: create option for select2 element
+  function mkOpt(value, text) {
+    return $('<option>').val(value).text(text);
+  }
+
+  // --- initialize UI elements ---
+  $(function(){
+    // init select2 on multi selects
+    $('#tablesSelect').select2({ placeholder: 'Select tables', width: '100%' });
+    $('#columnsSelect').select2({ placeholder: 'Select columns', width: '100%' });
+
+    // fill tables select
+    Object.keys(METADATA.tables).forEach(t => {
+      $('#tablesSelect').append(mkOpt(t, t));
+    });
+
+    // initialize reports list (merge sample + saved)
+    loadReportsToDropdown();
+
+    // UI events
+    $('#roleSelect').on('change', onRoleChange);
+    $('#actionSelect').on('change', onActionChange);
+    $('#reportSelect').on('change', onReportSelect);
+    $('#tablesSelect').on('change', onTablesChange);
+    $('#columnsSelect').on('change', buildGeneratedQuery);
+    $('#queryType').on('change', buildGeneratedQuery);
+    $('#addFilterBtn').on('click', addFilterRow);
+    $('#previewBtn').on('click', previewQuery);
+    $('#saveBtn').on('click', saveTempDraft);
+    $('#submitBtn').on('click', submitReport);
+    $('#rawEditToggle').on('click', ()=> $('#rawEditor').toggle());
+    $('#rawPreviewBtn').on('click', ()=> previewRaw($('#rawQuery').val(), $('#queryType').val()));
+    $('#rawApplyBtn').on('click', ()=> applyRawToBuilder());
+
+    // initialize actionSelect disabled until role chosen
+    $('#actionSelect').prop('disabled', true);
+
+    // toggle builder visibility initially off
+    $('#builderPanel').hide();
+  });
+
+  // --- Role / Action / Report flows ---
+  function onRoleChange() {
+    const role = $('#roleSelect').val();
+    $('#actionSelect').prop('disabled', !role);
+    $('#actionSelect').val('');
+    $('#reportSelect').val('');
+    $('#reportsCol').hide();
+    $('#builderPanel').hide();
+    $('#rawEditor').hide();
+    $('#previewPanel').hide();
+    clearBuilderState();
+    // load saved reports again (shows newly submitted ones)
+    loadReportsToDropdown();
+  }
+
+  function onActionChange() {
+    const act = $('#actionSelect').val();
+    clearBuilderState();
+    if (!act) { $('#builderPanel').hide(); $('#reportsCol').hide(); return; }
+
+    $('#builderPanel').show();
+    $('#rawEditor').hide();
+    $('#previewPanel').hide();
+
+    if (act === 'edit') {
+      $('#reportsCol').show();
+    } else {
+      $('#reportsCol').hide();
+      // Create new -> start with blank builder; still pre-add an empty filters row
+      $('#generatedQuery').val('');
+      refreshColumnsOptions();
+      removeAllFilterRows();
+    }
+  }
+
+  function onReportSelect() {
+    const reportKey = $('#reportSelect').val();
+    if (!reportKey) {
+      clearBuilderState();
+      return;
+    }
+    // get report SQL: check localStorage saved first, then sampleReports
+    const stored = JSON.parse(localStorage.getItem('ssqb_saved_reports') || '{}');
+    const sql = stored[reportKey] || METADATA.sampleReports[reportKey];
+    if (!sql) { alert('Report SQL not found'); return; }
+    // put it in generatedQuery and attempt to parse into builder selections
+    $('#generatedQuery').val(sql);
+    parseQueryToBuilder(sql);
+    $('#previewPanel').hide();
+  }
+
+  // load sample + saved reports into dropdown
+  function loadReportsToDropdown() {
+    $('#reportSelect').empty();
+    $('#reportSelect').append(mkOpt('', '-- Choose Report --'));
+    // sample reports
+    for (const key of Object.keys(METADATA.sampleReports)) {
+      $('#reportSelect').append(mkOpt(key, prettifyKey(key)));
+    }
+    // saved ones
+    const saved = JSON.parse(localStorage.getItem('ssqb_saved_reports') || '{}');
+    for (const key of Object.keys(saved)) {
+      $('#reportSelect').append(mkOpt(key, `${prettifyKey(key)} (saved)`));
+    }
+  }
+
+  function prettifyKey(k) {
+    return k.replace(/([A-Z])/g, ' $1').replace(/^\w/, c => c.toUpperCase());
+  }
+
+  // --- Table / Column management ---
+  function onTablesChange() {
+    refreshColumnsOptions();
+    // update filter table selects to show only selected tables
+    updateFilterTableOptions();
+    buildGeneratedQuery();
+  }
+
+  function refreshColumnsOptions() {
+    const selectedTables = $('#tablesSelect').val() || [];
+    const colSelect = $('#columnsSelect');
+    colSelect.empty();
+    // populate columns as table.column
+    selectedTables.forEach(t => {
+      const cols = METADATA.tables[t] || [];
+      cols.forEach(c => {
+        colSelect.append(mkOpt(`${t}.${c}`, `${t}.${c}`));
+      });
+    });
+    colSelect.trigger('change');
+  }
+
+  // --- Filters UI ---
+  function updateFilterTableOptions() {
+    const selectedTables = $('#tablesSelect').val() || [];
+    $('#filtersArea .filter-row').each(function(){
+      const tableSel = $(this).find('.filter-table');
+      const current = tableSel.val();
+      tableSel.empty();
+      tableSel.append(mkOpt('', '--table--'));
+      // prefer showing only selected tables, but fall back to all if none chosen
+      const choices = (selectedTables.length ? selectedTables : Object.keys(METADATA.tables));
+      choices.forEach(t => tableSel.append(mkOpt(t,t)));
+      // try to restore value if still valid
+      if (current && choices.indexOf(current) !== -1) tableSel.val(current);
+    });
+  }
+
+  function addFilterRow(prefill) {
+    // prefill allowed: {table, column, op, value}
+    const idx = Date.now();
+    const row = $(`
+      <div class="filter-row d-flex align-items-center" data-id="${idx}">
+        <select class="form-select filter-table me-2" style="width:20%"></select>
+        <select class="form-select filter-column me-2" style="width:30%"></select>
+        <select class="form-select filter-op me-2" style="width:15%">
+          <option>=</option><option>!=</option><option>&gt;</option><option>&lt;</option><option>&gt;=</option><option>&lt;=</option><option>LIKE</option>
+        </select>
+        <input type="text" class="form-control filter-value me-2" style="width:30%" placeholder="value"/>
+        <button class="btn btn-sm btn-outline-danger remove-filter">X</button>
+      </div>
+    `);
+
+    // fill table options
+    const selectedTables = $('#tablesSelect').val() || [];
+    const choices = (selectedTables.length ? selectedTables : Object.keys(METADATA.tables));
+    const tableSel = row.find('.filter-table');
+    tableSel.append(mkOpt('', '--table--'));
+    choices.forEach(t => tableSel.append(mkOpt(t,t)));
+    // on change of table -> populate columns for that table
+    tableSel.on('change', function(){
+      const tbl = $(this).val();
+      const colSel = $(this).closest('.filter-row').find('.filter-column');
+      colSel.empty();
+      colSel.append(mkOpt('', '--column--'));
+      if (tbl && METADATA.tables[tbl]) {
+        METADATA.tables[tbl].forEach(c => colSel.append(mkOpt(c,c)));
+      }
+      buildGeneratedQuery();
+    });
+
+    // column/op/value changes -> rebuild query live
+    row.find('.filter-column, .filter-op, .filter-value').on('change keyup', buildGeneratedQuery);
+
+    // remove
+    row.find('.remove-filter').on('click', function(){
+      $(this).closest('.filter-row').remove();
+      buildGeneratedQuery();
+    });
+
+    // prefill if provided
+    if (prefill) {
+      if (prefill.table) tableSel.val(prefill.table).trigger('change');
+      if (prefill.column) {
+        // wait for column list to load
+        setTimeout(() => {
+          row.find('.filter-column').val(prefill.column);
+        }, 50);
+      }
+      if (prefill.op) row.find('.filter-op').val(prefill.op);
+      if (prefill.value) row.find('.filter-value').val(prefill.value);
+    }
+
+    $('#filtersArea').append(row);
+  }
+
+  function removeAllFilterRows() {
+    $('#filtersArea').empty();
+  }
+
+  // --- Query Builder logic (build SELECT / FROM / JOIN / WHERE) ---
+  function buildGeneratedQuery() {
+    const queryType = $('#queryType').val();
+    const tables = $('#tablesSelect').val() || [];
+    const cols = $('#columnsSelect').val() || [];
+    const aliasMap = {}; // table -> alias e.g. customers -> c
+    tables.forEach(t => aliasMap[t] = t.charAt(0));
+
+    let selectClause = '';
+    if (cols.length) {
+      selectClause = cols.join(', ');
+    } else if (tables.length) {
+      // default to firstTable.*
+      selectClause = tables.map(t => `${t}.*`).join(', ');
+    } else {
+      selectClause = '*';
+    }
+
+    let fromClause = '';
+    if (!tables.length) {
+      fromClause = '';
+    } else {
+      // build FROM + JOINs using relationships
+      const included = new Set();
+      const joins = [];
+      const first = tables[0];
+      included.add(first);
+      fromClause = `${first}`;
+      // for each other table find a relationship to any included table
+      for (let i = 1; i < tables.length; i++) {
+        const t = tables[i];
+        // search relationship connecting t <-> any included
+        let rel = METADATA.relationships.find(r => (r.leftTable === t && included.has(r.rightTable)) || (r.rightTable === t && included.has(r.leftTable)));
+        if (rel) {
+          // determine which side is included
+          let left, right, leftAlias, rightAlias;
+          if (included.has(rel.leftTable)) {
+            left = rel.leftTable; right = rel.rightTable;
+            leftAlias = aliasMap[left]; rightAlias = aliasMap[right];
+            joins.push(`JOIN ${right} ON ${left}.${rel.leftCol} = ${right}.${rel.rightCol}`);
+            included.add(right);
+          } else {
+            left = rel.rightTable; right = rel.leftTable;
+            joins.push(`JOIN ${right} ON ${left}.${rel.rightCol} = ${right}.${rel.leftCol}`);
+            included.add(right);
+          }
+        } else {
+          // fallback: add LEFT JOIN with placeholder ON
+          joins.push(`LEFT JOIN ${t} ON 1=1 -- <-- add proper join condition`);
+          included.add(t);
+        }
+      }
+      fromClause += (joins.length ? '\n' + joins.join('\n') : '');
+    }
+
+    // where filters
+    const filters = [];
+    $('#filtersArea .filter-row').each(function(){
+      const tbl = $(this).find('.filter-table').val();
+      const col = $(this).find('.filter-column').val();
+      const op = $(this).find('.filter-op').val();
+      const val = $(this).find('.filter-value').val();
+      if (tbl && col && op && val !== undefined && val !== '') {
+        if (op === 'LIKE') filters.push(`${tbl}.${col} ${op} '%${val}%'`);
+        else filters.push(`${tbl}.${col} ${op} '${val}'`);
+      }
+    });
+
+    let q = '';
+    if (!fromClause) {
+      q = `SELECT ${selectClause}`;
+    } else {
+      q = `SELECT ${selectClause}\nFROM ${fromClause}${filters.length ? '\nWHERE ' + filters.join(' AND ') : ''};`;
+    }
+
+    $('#generatedQuery').val(q);
+    return q;
+  }
+
+  // --- parse existing SQL to prefill builder (best-effort) ---
+  function parseQueryToBuilder(sql) {
+    try {
+      const lower = sql.toLowerCase();
+      // find SELECT ... FROM
+      const selectMatch = sql.match(/select\s+([\s\S]*?)\s+from\s+/i);
+      const colsPart = selectMatch ? selectMatch[1].trim() : null;
+      // get FROM table (may include alias)
+      const fromMatch = sql.match(/from\s+([^\s;]+)/i);
+      const firstTable = fromMatch ? fromMatch[1].split(/\s+/)[0].replace(/[,;]/g,'') : null;
+
+      // find join tables
+      const joinMatches = [...sql.matchAll(/\bjoin\s+([^\s;]+)/ig)].map(m => m[1].split(/\s+/)[0].replace(/[,;]/g,''));
+
+      const tableCandidates = [];
+      if (firstTable) tableCandidates.push(cleanTableName(firstTable));
+      joinMatches.forEach(j => tableCandidates.push(cleanTableName(j)));
+      // filter by known metadata
+      const knownTables = Object.keys(METADATA.tables);
+      const selectedTables = tableCandidates.filter(t => knownTables.includes(t));
+
+      // set tables select
+      $('#tablesSelect').val(selectedTables).trigger('change');
+
+      // parse columns
+      const selectedColumns = [];
+      if (colsPart) {
+        // split by comma, map to table.column if possible
+        colsPart.split(',').map(s => s.trim()).forEach(token => {
+          // remove aliases like "customers.id as customer_id"
+          let colToken = token.split(/\s+as\s+/i)[0].trim();
+          // if table.col present
+          if (colToken.indexOf('.') !== -1) {
+            selectedColumns.push(colToken.replace(/\s*$/,''));
+          } else {
+            // if only column name, try to attach to first matching table containing that column
+            for (const t of selectedTables) {
+              if (METADATA.tables[t] && METADATA.tables[t].includes(colToken.replace(/["'`]/g,''))) {
+                selectedColumns.push(`${t}.${colToken}`);
+                break;
+              }
+            }
+          }
+        });
+      }
+      // set columnsSelect values (ensure options exist: refresh columns first)
+      setTimeout(() => {
+        refreshColumnsOptions();
+        // If selectedColumns not present in options (alias differences), fallback to none
+        const available = $('#columnsSelect option').map((i,o) => $(o).val()).get();
+        const finalCols = selectedColumns.filter(c => available.includes(c));
+        if (finalCols.length) {
+          $('#columnsSelect').val(finalCols).trigger('change');
+        } else {
+          // no good mapping -> leave columns blank
+          $('#columnsSelect').val([]).trigger('change');
+        }
+        // parse WHERE filters and attempt to prefill simple equality filters
+        removeAllFilterRows();
+        const whereMatch = sql.match(/\bwhere\s+([\s\S]*?)(?:group\s+by|order\s+by|;|$)/i);
+        if (whereMatch) {
+          const wherePart = whereMatch[1];
+          // split by AND (simple)
+          wherePart.split(/\s+and\s+/i).forEach(cond => {
+            // match patterns like table.col op 'value' or col op 'value'
+            const m = cond.match(/([a-z0-9_]+\.)?([a-z0-9_]+)\s*(=|!=|>|<|>=|<=|like)\s*('?)([^']*?)\3/i);
+            if (m) {
+              const tbl = m[1] ? m[1].replace('.','') : (selectedTables[0] || '');
+              const col = m[2];
+              const op = m[3].toUpperCase();
+              const val = m[5];
+              addFilterRow({table: tbl, column: col, op: op, value: val});
+            }
+          });
+        }
+        // done
+        buildGeneratedQuery();
+      }, 100);
+    } catch (err) {
+      console.warn('parseQueryToBuilder failed', err);
+    }
+  }
+
+  function cleanTableName(s) {
+    return s.replace(/["'`;]/g,'').split('.')[0];
+  }
+
+  // --- Preview logic (call API -> fallback to mock) ---
+  function previewQuery() {
+    const q = $('#generatedQuery').val();
+    if (!q || !q.trim()) { alert('Please generate a SQL query first'); return; }
+    const target = $('#queryType').val();
+    $('#previewNotice').text('Trying server preview...'); $('#previewPanel').show();
+    // attempt server call
+    $.ajax({
+      url: '/api/preview',
+      method: 'POST',
+      contentType: 'application/json',
+      data: JSON.stringify({ query: q, target }),
+      timeout: 4000
+    }).done(function(data){
+      $('#previewNotice').text('Preview from server (first up to 10 rows):');
+      renderPreviewTable(data);
+    }).fail(function(){
+      // fallback mock preview
+      const mock = mockPreviewFromQuery(q);
+      $('#previewNotice').text('Server preview failed — showing mock preview (client-side):');
+      renderPreviewTable(mock);
+    });
+  }
+
+  function previewRaw(sql, target) {
+    if (!sql || !sql.trim()) { alert('Please provide raw SQL'); return; }
+    // simply re-use previewQuery flow by setting generatedQuery temporarily
+    const previous = $('#generatedQuery').val();
+    $('#generatedQuery').val(sql);
+    previewQuery();
+    $('#generatedQuery').val(previous);
+  }
+
+  function mockPreviewFromQuery(sql) {
+    // extract column names from SELECT part else use some defaults
+    const selectMatch = sql.match(/select\s+([\s\S]*?)\s+from\s+/i);
+    let cols = [];
+    if (selectMatch) {
+      cols = selectMatch[1].split(',').map(s => s.trim()).slice(0,10);
+      // remove aliases "AS alias"
+      cols = cols.map(c => c.split(/\s+as\s+/i)[0].trim());
+    }
+    if (!cols.length) {
+      cols = ['col1','col2','col3'];
+    }
+    const rows = [];
+    for (let i=1;i<=10;i++) {
+      const r = {};
+      cols.forEach(c => {
+        const name = c.includes('.') ? c.split('.')[1] : c.replace(/[^a-zA-Z0-9_]/g, '');
+        r[c] = sampleValueForColumn(name, i);
+      });
+      rows.push(r);
+    }
+    return { columns: cols, rows };
+  }
+
+  function sampleValueForColumn(name, i) {
+    const n = name.toLowerCase();
+    if (n.includes('id')) return i;
+    if (n.includes('name')) return 'Name ' + i;
+    if (n.includes('email')) return 'user'+i+'@example.com';
+    if (n.includes('date')) return `2024-0${(i%9)+1}-01`;
+    if (n.includes('price') || n.includes('amount') || n.includes('total')) return (i*12.5).toFixed(2);
+    if (n.includes('qty') || n.includes('quantity') || n.includes('stock')) return (i*2);
+    return 'val_'+i;
+  }
+
+  function renderPreviewTable(data) {
+    try {
+      const columns = data.columns || (data.rows && Object.keys(data.rows[0]) || []);
+      const table = $('#previewTable').empty();
+      const thead = $('<thead>').appendTo(table);
+      const trh = $('<tr>').appendTo(thead);
+      columns.forEach(c => $('<th>').text(c).appendTo(trh));
+      const tbody = $('<tbody>').appendTo(table);
+      (data.rows || []).forEach(r => {
+        const tr = $('<tr>').appendTo(tbody);
+        columns.forEach(c => $('<td>').text(r[c] === undefined ? '' : r[c]).appendTo(tr));
+      });
+    } catch (err) {
+      $('#previewTable').html('<div class="text-danger">Preview rendering failed</div>');
+    }
+  }
+
+  // --- Save / Submit ---
+  function saveTempDraft() {
+    const role = $('#roleSelect').val() || 'unknown';
+    const draft = {
+      role,
+      query: $('#generatedQuery').val(),
+      target: $('#queryType').val(),
+      savedAt: Date.now()
+    };
+    sessionStorage.setItem('ssqb_temp_draft', JSON.stringify(draft));
+    alert('Saved temporary draft to sessionStorage.');
+  }
+
+  function submitReport() {
+    const sql = $('#generatedQuery').val();
+    if (!sql || !sql.trim()) { alert('Generate a query before submit'); return; }
+    let name = prompt('Enter a name for this report (unique key, e.g., monthlySalesReport):');
+    if (!name) { alert('Submit cancelled - name required'); return; }
+    // store in localStorage under ssqb_saved_reports as map
+    const stored = JSON.parse(localStorage.getItem('ssqb_saved_reports') || '{}');
+    stored[name] = sql;
+    localStorage.setItem('ssqb_saved_reports', JSON.stringify(stored));
+    alert('Report submitted and saved locally. It is now available in Existing Reports dropdown.');
+    // reload reports dropdown
+    loadReportsToDropdown();
+    $('#reportsCol').show();
+  }
+
+  // --- Raw editor apply to builder ---
+  function applyRawToBuilder() {
+    const sql = $('#rawQuery').val();
+    if (!sql || !sql.trim()) { alert('Paste SQL into raw editor first'); return; }
+    $('#generatedQuery').val(sql);
+    parseQueryToBuilder(sql);
+    $('#rawEditor').hide();
+    $('#previewPanel').hide();
+  }
+
+  // --- parse plus helper to clear builder ---
+  function clearBuilderState() {
+    $('#tablesSelect').val(null).trigger('change');
+    $('#columnsSelect').val(null).trigger('change');
+    $('#generatedQuery').val('');
+    removeAllFilterRows();
+    $('#previewPanel').hide();
+    $('#rawEditor').hide();
+  }
+
+  </script>
+</body>
+</html>
